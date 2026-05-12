@@ -155,7 +155,7 @@ export default function Repairs() {
       const { data: newTicket } = await api.post('/repairs', payload);
       
       // Reset form immediately
-      setForm({ customer_id: '', device_model: '', imei: '', issue: '', technician: defaultTechnician, estimated_cost: 0, notes: '', priority: 'Normal' });
+      setForm({ customer_id: '', device_model: '', imei: '', issue: '', technician: defaultTechnician, estimated_cost: 0, advance_payment: 0, notes: '', priority: 'Normal' });
       setNewCustomer({ name: '', phone: '', email: '', address: '' });
       
       // Update data
@@ -504,7 +504,11 @@ export default function Repairs() {
               </div>
               <div className="space-y-2">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Estimated Labor Cost</p>
-                <Input type="number" placeholder="0.00" value={form.estimated_cost} onChange={e => setForm({...form, estimated_cost: e.target.value})} />
+                <Input type="number" placeholder="0.00" value={form.estimated_cost} onChange={e => setForm({...form, estimated_cost: Number(e.target.value)})} />
+              </div>
+              <div className="space-y-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">Advance Deposit</p>
+                <Input type="number" placeholder="0.00" value={form.advance_payment || ''} onChange={e => setForm({...form, advance_payment: Number(e.target.value)})} className="border-indigo-500/50 focus:border-indigo-400 bg-indigo-500/10" />
               </div>
               <div className="space-y-2">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Priority</p>
@@ -519,7 +523,7 @@ export default function Repairs() {
                 variant="secondary"
                 onClick={() => {
                   setShowCreate(false);
-                  setForm({ customer_id: '', device_model: '', imei: '', issue: '', technician: defaultTechnician, estimated_cost: 0, notes: '', priority: 'Normal' });
+                  setForm({ customer_id: '', device_model: '', imei: '', issue: '', technician: defaultTechnician, estimated_cost: 0, advance_payment: 0, notes: '', priority: 'Normal' });
                   setNewCustomer({ name: '', phone: '', email: '', address: '' });
                 }}
                 className="flex-1"
@@ -628,9 +632,21 @@ export default function Repairs() {
                         LKR {(selectedRepair.estimated_cost + parts.reduce((acc, p) => acc + (p.quantity * p.unit_cost), 0)).toLocaleString()}
                       </p>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right space-y-1">
                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Labor Cost</p>
-                       <p className="text-lg font-bold text-slate-300">LKR {selectedRepair.estimated_cost.toLocaleString()}</p>
+                       <p className="text-sm font-bold text-slate-300">LKR {selectedRepair.estimated_cost.toLocaleString()}</p>
+                       
+                       {selectedRepair.advance_payment > 0 && (
+                         <>
+                           <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest pt-2">Deposit Paid</p>
+                           <p className="text-sm font-bold text-emerald-400">- LKR {selectedRepair.advance_payment.toLocaleString()}</p>
+                           
+                           <p className="text-[10px] font-bold text-rose-500 uppercase tracking-widest pt-2">Balance Due</p>
+                           <p className="text-lg font-black text-rose-400">
+                             LKR {Math.max(0, (selectedRepair.estimated_cost + parts.reduce((acc, p) => acc + (p.quantity * p.unit_cost), 0)) - selectedRepair.advance_payment).toLocaleString()}
+                           </p>
+                         </>
+                       )}
                     </div>
                   </div>
                </div>

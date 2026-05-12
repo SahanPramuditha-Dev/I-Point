@@ -113,3 +113,131 @@ def export_sales(
         media_type="text/csv", 
         headers={"Content-Disposition": f"attachment; filename=sales_report_{datetime.now().strftime('%Y%m%d')}.csv"}
     )
+
+@router.get('/export-repairs')
+def export_repairs(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user)
+):
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+    
+    rep_q = db.query(RepairTicket)
+    if date_from:
+        rep_q = rep_q.filter(RepairTicket.created_at >= datetime.fromisoformat(date_from))
+    if date_to:
+        rep_q = rep_q.filter(RepairTicket.created_at < datetime.fromisoformat(date_to) + timedelta(days=1))
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Ticket No", "Intake Date", "Delivery Date", "Customer ID", "Device", "Status", "Est Cost", "Advance Paid"])
+    
+    for r in rep_q.all():
+        writer.writerow([r.ticket_no, r.created_at.isoformat(), r.delivered_at.isoformat() if r.delivered_at else "", r.customer_id, r.device_model, r.status, r.estimated_cost, r.advance_payment])
+    
+    output.seek(0)
+    return StreamingResponse(
+        output, 
+        media_type="text/csv", 
+        headers={"Content-Disposition": f"attachment; filename=repairs_report_{datetime.now().strftime('%Y%m%d')}.csv"}
+    )
+
+@router.get('/export-inventory')
+def export_inventory(
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user)
+):
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+    
+    inv_q = db.query(InventoryItem)
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["SKU/Barcode", "Product Name", "Quantity", "Cost Price", "Retail Price", "Asset Value", "Potential Revenue"])
+    
+    for i in inv_q.all():
+        writer.writerow([i.barcode or i.sku, i.name, i.quantity, i.cost_price, i.sale_price, i.quantity * i.cost_price, i.quantity * i.sale_price])
+    
+    output.seek(0)
+    return StreamingResponse(
+        output, 
+        media_type="text/csv", 
+        headers={"Content-Disposition": f"attachment; filename=inventory_report_{datetime.now().strftime('%Y%m%d')}.csv"}
+    )
+
+@router.get('/sales')
+def detailed_sales_report(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user)
+):
+    sales_q = db.query(Sale)
+    if date_from:
+        start_dt = datetime.fromisoformat(date_from)
+        sales_q = sales_q.filter(Sale.created_at >= start_dt)
+    if date_to:
+        end_dt = datetime.fromisoformat(date_to) + timedelta(days=1)
+        sales_q = sales_q.filter(Sale.created_at < end_dt)
+        
+    sales = sales_q.order_by(Sale.created_at.desc()).all()
+    return [{
+        "id": s.id,
+        "invoice_no": f"INV-{s.id:05d}",
+        "total": s.total,
+        "payment_method": s.payment_method,
+        "is_voided": s.is_voided,
+        "is_return": s.is_return,
+        "created_at": s.created_at.isoformat(),
+        "customer_id": s.customer_id
+    } for s in sales]
+
+@router.get('/repairs')
+def detailed_repairs_report(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user)
+):
+    rep_q = db.query(RepairTicket)
+    if date_from:
+        start_dt = datetime.fromisoformat(date_from)
+        rep_q = rep_q.filter(RepairTicket.created_at >= start_dt)
+    if date_to:
+        end_dt = datetime.fromisoformat(date_to) + timedelta(days=1)
+        rep_q = rep_q.filter(RepairTicket.created_at < end_dt)
+        
+    tickets = rep_q.order_by(RepairTicket.created_at.desc()).all()
+    return [{
+        "id": t.id,
+        "ticket_no": t.ticket_no,
+        "device": t.device_model,
+        "issue": t.issue,
+        "status": t.status,
+        "estimated_cost": t.estimated_cost,
+        "advance_payment": t.advance_payment,
+        "created_at": t.created_at.isoformat(),
+        "delivered_at": t.delivered_at.isoformat() if t.delivered_at else None
+    } for t in tickets]
+
+@router.get('/inventory')
+def detailed_inventory_report(
+    db: Session = Depends(get_db),
+    _=Depends(get_current_user)
+):
+    items = db.query(InventoryItem).all()
+    return [{
+        "id": i.id,
+        "name": i.name,
+        "category": i.category,
+        "quantity": i.quantity,
+        "cost_price": i.cost_price,
+        "sale_price": i.sale_price,
+        "total_value": i.quantity * i.cost_price,
+        "potential_revenue": i.quantity * i.sale_price
+    } for i in items]

@@ -1,20 +1,20 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useFetch } from "../hooks/useFetch";
 import api from "../lib/api";
-import { Badge, Button, Input, PageTitle, SectionCard, Select, Table } from "../components/UI";
-import { ShoppingBag, Truck, PackageCheck, History } from "lucide-react";
+import { Badge } from "../components/UI";
+import { ShoppingBag, Truck, PackageCheck, History, Plus, X, List, Calendar } from "lucide-react";
 import { useFeedback } from "../components/FeedbackProvider";
 
 export default function PurchaseOrders() {
   const { toast, confirm } = useFeedback();
   const { data: pos, setData: setPos, loading } = useFetch('/purchase');
-  const { data: suppliers } = useFetch('/settings/suppliers');
+  const { data: suppliers } = useFetch('/inventory/suppliers');
   const { data: inventory } = useFetch('/inventory');
 
   const [isCreating, setIsCreating] = useState(false);
   const [selectedPo, setSelectedPo] = useState(null);
   const [form, setForm] = useState({ supplier_id: "", note: "", items: [] });
-  const [newItem, setNewItem] = useState({ item_id: "", quantity: 1, unit_cost: 0 });
+  const [newItem, setNewItem] = useState({ item_id: "", quantity: 1, unit_cost: "" });
 
   const addPoItem = () => {
     if (!newItem.item_id) return;
@@ -23,7 +23,7 @@ export default function PurchaseOrders() {
       ...f,
       items: [...f.items, { ...newItem, item_id: Number(newItem.item_id), item_name: inv?.name }]
     }));
-    setNewItem({ item_id: "", quantity: 1, unit_cost: 0 });
+    setNewItem({ item_id: "", quantity: 1, unit_cost: "" });
   };
 
   const removePoItem = (idx) => {
@@ -41,22 +41,27 @@ export default function PurchaseOrders() {
       setPos([newPo, ...(pos || [])]);
       setIsCreating(false);
       setForm({ supplier_id: "", note: "", items: [] });
+      toast("Purchase order drafted successfully", "success");
     } catch (err) {
       toast("Failed to create PO", "error");
     }
   };
 
   const viewPo = async (poId) => {
-    const { data: details } = await api.get(`/purchase/${poId}`);
-    setSelectedPo(details);
+    try {
+      const { data: details } = await api.get(`/purchase/${poId}`);
+      setSelectedPo(details);
+    } catch (err) {
+      toast("Failed to load PO details", "error");
+    }
   };
 
   const receivePo = async (poId) => {
-    const ok = await confirm("Receive Purchase Order", "This will update inventory stock. Continue?");
+    const ok = await confirm("Receive Goods (GRN)", "This will finalize the PO and add items to your main inventory. Continue?");
     if (!ok) return;
     try {
       await api.post(`/purchase/${poId}/receive`);
-      toast("PO received and stock updated", "success");
+      toast("Goods Received Note processed! Stock updated.", "success");
       const { data: updatedPos } = await api.get('/purchase');
       setPos(updatedPos);
       setSelectedPo(null);
@@ -65,172 +70,260 @@ export default function PurchaseOrders() {
     }
   };
 
-  if (loading) return <div className="p-8 text-slate-400">Loading orders...</div>;
+  if (loading) return <div className="flex items-center justify-center h-64 text-slate-400">Loading Purchase Orders...</div>;
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <PageTitle title="Purchase Orders / GRN" subtitle="Manage supplier orders and stock intake" />
-        <Button onClick={() => setIsCreating(true)}>Create New Order</Button>
+    <div className="flex flex-col h-full gap-4 pb-4">
+      {/* HEADER SECTION */}
+      <div className="flex justify-between items-end shrink-0">
+        <div>
+          <h1 className="text-2xl font-black tracking-tight text-white">Purchase Orders & GRN</h1>
+          <p className="text-xs text-slate-400 mt-1">Manage supplier orders, tracking and goods intake</p>
+        </div>
+        <button onClick={() => setIsCreating(true)} className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/20 transition-all flex items-center gap-2">
+          <Plus size={14}/> Draft Purchase Order
+        </button>
       </div>
 
-      <div className="grid grid-cols-12 gap-4">
-        <SectionCard title="Order History" className="col-span-12">
-          <Table className="table-base">
-            <thead>
+      {/* MAIN TABLE PANEL */}
+      <div className="flex-1 bg-slate-900/60 backdrop-blur-md border border-white/10 rounded-2xl flex flex-col overflow-hidden shadow-2xl">
+        <div className="p-4 border-b border-white/5 bg-black/20 shrink-0">
+          <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+            <History size={14}/> Order History & Intake Pipeline
+          </h3>
+        </div>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <table className="w-full text-left border-collapse">
+            <thead className="sticky top-0 bg-slate-950/90 backdrop-blur z-10 text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/10 shadow-sm">
               <tr>
-                <th>PO Number</th>
-                <th>Supplier</th>
-                <th>Date</th>
-                <th>Total Cost</th>
-                <th>Status</th>
-                <th className="text-right">Actions</th>
+                <th className="px-6 py-4 font-bold">PO Tracker Number</th>
+                <th className="px-6 py-4 font-bold">Supplier Info</th>
+                <th className="px-6 py-4 font-bold">Created On</th>
+                <th className="px-6 py-4 font-bold text-center">Status</th>
+                <th className="px-6 py-4 font-bold text-right">Invoice Value</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-white/5">
               {(pos || []).map(p => (
-                <tr key={p.id}>
-                  <td className="font-bold text-sky-400">{p.po_number}</td>
-                  <td>{p.supplier_name || "Supplier #" + p.supplier_id}</td>
-                  <td className="text-slate-400 text-xs">{new Date(p.created_at).toLocaleDateString()}</td>
-                  <td className="font-semibold text-emerald-400">LKR {p.total_cost.toLocaleString()}</td>
-                  <td>
-                    <Badge tone={p.status === "Received" ? "green" : p.status === "Draft" ? "slate" : "amber"}>
+                <tr key={p.id} onClick={() => viewPo(p.id)} className="hover:bg-white/[0.02] transition-colors cursor-pointer group">
+                  <td className="px-6 py-4">
+                     <div className="flex items-center gap-3">
+                       <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-black text-sm uppercase border border-indigo-500/20">
+                         <PackageCheck size={14} />
+                       </div>
+                       <span className="font-black text-sm text-indigo-300 group-hover:text-indigo-200 transition-colors">{p.po_number}</span>
+                     </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-2 text-slate-300 font-bold text-sm">
+                      <Truck size={14} className="text-slate-500" />
+                      {p.supplier_name || `Supplier #${p.supplier_id}`}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-1.5 text-slate-400 text-sm font-medium">
+                      <Calendar size={14} className="text-slate-500" />
+                      {new Date(p.created_at).toLocaleDateString()}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <Badge tone={p.status === "Received" ? "green" : p.status === "Draft" ? "slate" : "amber"} className="text-[10px] px-2 py-0.5 uppercase tracking-widest">
                       {p.status}
                     </Badge>
                   </td>
-                  <td className="text-right">
-                    <Button variant="ghost" className="btn-sm" onClick={() => viewPo(p.id)}>View Details</Button>
+                  <td className="px-6 py-4 text-right">
+                    <div className="font-black text-sm text-slate-200">LKR {p.total_cost.toLocaleString()}</div>
+                    <div className="text-[10px] text-indigo-400 mt-1 font-bold tracking-wide group-hover:underline">View GRN →</div>
                   </td>
                 </tr>
               ))}
+              {(pos || []).length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                    <ShoppingBag size={32} className="mx-auto mb-3 opacity-30"/>
+                    <p className="text-sm font-bold">No purchase orders found</p>
+                    <p className="text-xs mt-1">Draft a new order to restock your inventory.</p>
+                  </td>
+                </tr>
+              )}
             </tbody>
-          </Table>
-          {(pos || []).length === 0 && <p className="text-center py-12 text-slate-500 italic">No purchase orders found.</p>}
-        </SectionCard>
+          </table>
+        </div>
       </div>
 
-      {/* Create PO Modal */}
+      {/* CREATE PO MODAL */}
       {isCreating && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#0b1020] border border-white/10 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
-              <h3 className="font-bold">Create Purchase Order</h3>
-              <button onClick={() => setIsCreating(false)} className="text-slate-400 hover:text-white">✕</button>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-[#0f172a] border border-white/10 rounded-3xl w-full max-w-5xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
+              <h2 className="text-xl font-black text-white flex items-center gap-2"><Truck size={20} className="text-indigo-400"/> Draft Purchase Order</h2>
+              <button onClick={() => setIsCreating(false)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button>
             </div>
-            <div className="p-6 overflow-auto grid grid-cols-12 gap-6">
-              <div className="col-span-4 space-y-4">
+            
+            <div className="flex-1 overflow-hidden grid grid-cols-12 gap-0">
+              
+              {/* Left Sidebar - Add Items */}
+              <div className="col-span-4 border-r border-white/5 bg-black/20 p-6 flex flex-col gap-6 overflow-y-auto custom-scrollbar">
                 <div>
-                  <p className="text-[10px] text-slate-400 mb-1 uppercase">Supplier</p>
-                  <Select value={form.supplier_id} onChange={e => setForm({...form, supplier_id: e.target.value})}>
-                    <option value="">Select Supplier</option>
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-1">Select Supplier</label>
+                  <select 
+                    className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-indigo-500" 
+                    value={form.supplier_id} 
+                    onChange={e => setForm({...form, supplier_id: e.target.value})}
+                  >
+                    <option value="">-- Choose Supplier --</option>
                     {(suppliers || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </Select>
+                  </select>
                 </div>
+                
                 <div>
-                  <p className="text-[10px] text-slate-400 mb-1 uppercase">Order Note</p>
-                  <Input value={form.note} onChange={e => setForm({...form, note: e.target.value})} placeholder="Internal notes..." />
+                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-1">Internal Note / Ref</label>
+                  <textarea 
+                    className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-indigo-500 resize-none min-h-[80px]" 
+                    value={form.note} 
+                    onChange={e => setForm({...form, note: e.target.value})} 
+                    placeholder="e.g. Order for December stock..." 
+                  />
                 </div>
-                <div className="p-4 bg-white/5 rounded-xl border border-white/5 space-y-3">
-                  <p className="text-xs font-bold text-sky-300">Add Item</p>
-                  <Select value={newItem.item_id} onChange={e => setNewItem({...newItem, item_id: e.target.value})}>
-                    <option value="">Choose Product</option>
-                    {(inventory || []).map(i => <option key={i.id} value={i.id}>{i.name} (Qty: {i.quantity})</option>)}
-                  </Select>
+
+                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 flex flex-col gap-4">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-indigo-400 flex items-center gap-2"><List size={14}/> Add Item to PO</h3>
+                  
+                  <select 
+                    className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-indigo-500" 
+                    value={newItem.item_id} 
+                    onChange={e => setNewItem({...newItem, item_id: e.target.value})}
+                  >
+                    <option value="">Select Inventory Item</option>
+                    {(inventory || []).map(i => <option key={i.id} value={i.id}>{i.name} ({i.quantity} in stock)</option>)}
+                  </select>
+                  
                   <div className="grid grid-cols-2 gap-2">
-                    <Input type="number" placeholder="Qty" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: Number(e.target.value)})} />
-                    <Input type="number" placeholder="Cost/Unit" value={newItem.unit_cost} onChange={e => setNewItem({...newItem, unit_cost: Number(e.target.value)})} />
+                    <div>
+                       <label className="text-[9px] text-slate-500 uppercase font-bold ml-1">Order Qty</label>
+                       <input type="number" className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-center font-bold text-white outline-none" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: Number(e.target.value)})} />
+                    </div>
+                    <div>
+                       <label className="text-[9px] text-slate-500 uppercase font-bold ml-1">Unit Cost (LKR)</label>
+                       <input type="number" className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-center font-bold text-white outline-none" placeholder="0" value={newItem.unit_cost} onChange={e => setNewItem({...newItem, unit_cost: e.target.value})} />
+                    </div>
                   </div>
-                  <Button variant="secondary" className="w-full" onClick={addPoItem}>Add to Order</Button>
+                  
+                  <button onClick={addPoItem} className="w-full py-2.5 mt-2 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 text-white transition-colors">
+                    Add to Manifest
+                  </button>
                 </div>
               </div>
-              <div className="col-span-8 flex flex-col">
-                <p className="text-[10px] text-slate-400 mb-2 uppercase">Items in Order</p>
-                <div className="flex-1 border border-white/5 rounded-xl bg-white/2 overflow-auto min-h-[300px]">
-                  <Table className="table-base">
-                    <thead>
-                      <tr>
-                        <th>Product</th>
-                        <th className="text-center">Qty</th>
-                        <th className="text-right">Unit Cost</th>
-                        <th className="text-right">Total</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {form.items.map((i, idx) => (
-                        <tr key={idx}>
-                          <td className="text-sm">{i.item_name}</td>
-                          <td className="text-center">{i.quantity}</td>
-                          <td className="text-right">LKR {i.unit_cost.toLocaleString()}</td>
-                          <td className="text-right font-bold">LKR {(i.quantity * i.unit_cost).toLocaleString()}</td>
-                          <td className="text-right">
-                            <button onClick={() => removePoItem(idx)} className="text-rose-400 px-2">✕</button>
-                          </td>
+
+              {/* Right Sidebar - PO Manifest */}
+              <div className="col-span-8 p-6 flex flex-col bg-[#0f172a]">
+                 <div className="flex justify-between items-end mb-4 shrink-0">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">PO Manifest</p>
+                 </div>
+                 
+                 <div className="flex-1 bg-black/20 border border-white/5 rounded-2xl overflow-y-auto custom-scrollbar">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="sticky top-0 bg-slate-900 backdrop-blur text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/5">
+                        <tr>
+                          <th className="px-4 py-3 font-bold">Product</th>
+                          <th className="px-4 py-3 font-bold text-center">Qty</th>
+                          <th className="px-4 py-3 font-bold text-right">Unit Cost</th>
+                          <th className="px-4 py-3 font-bold text-right">Line Total</th>
+                          <th className="px-4 py-3"></th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </Table>
-                </div>
-                <div className="mt-4 flex justify-between items-center">
-                  <div>
-                    <p className="text-xs text-slate-400 uppercase">Estimated Total</p>
-                    <p className="text-2xl font-bold text-sky-400">LKR {form.items.reduce((s, i) => s + (i.quantity * i.unit_cost), 0).toLocaleString()}</p>
-                  </div>
-                  <Button size="lg" className="px-10 h-12" onClick={submitPo}>Create Order</Button>
-                </div>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {form.items.map((i, idx) => (
+                          <tr key={idx} className="hover:bg-white/5 transition-colors">
+                            <td className="px-4 py-3 font-bold text-sm text-slate-200">{i.item_name}</td>
+                            <td className="px-4 py-3 text-center text-sm font-black text-slate-400">{i.quantity}</td>
+                            <td className="px-4 py-3 text-right text-sm text-slate-400">LKR {Number(i.unit_cost).toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right text-sm font-black text-white">LKR {(i.quantity * Number(i.unit_cost)).toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right">
+                              <button onClick={() => removePoItem(idx)} className="p-1 text-rose-500/50 hover:text-rose-400 bg-rose-500/5 hover:bg-rose-500/10 rounded transition-colors">
+                                <X size={14}/>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {form.items.length === 0 && (
+                           <tr><td colSpan={5} className="text-center py-16 text-slate-500 italic text-sm">No items added to manifest yet.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                 </div>
+
+                 <div className="mt-6 flex justify-between items-center shrink-0 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl">
+                    <div>
+                      <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Total Invoice Estimate</p>
+                      <p className="text-3xl font-black text-white mt-1">LKR {form.items.reduce((s, i) => s + (i.quantity * Number(i.unit_cost)), 0).toLocaleString()}</p>
+                    </div>
+                    <button onClick={submitPo} className="px-8 py-4 rounded-xl font-black text-white uppercase tracking-widest text-sm bg-indigo-600 hover:bg-indigo-500 shadow-xl shadow-indigo-900/50 transition-all">
+                      Confirm Draft Order
+                    </button>
+                 </div>
               </div>
+
             </div>
           </div>
         </div>
       )}
 
-      {/* View PO Details Modal */}
+      {/* VIEW PO MODAL (GRN Processing) */}
       {selectedPo && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#0b1020] border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
-            <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-[#0f172a] border border-white/10 rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden">
+            <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
               <div>
-                <h3 className="font-bold">{selectedPo.po_number} Details</h3>
-                <p className="text-[10px] text-slate-400">{selectedPo.supplier_name} • {new Date(selectedPo.created_at).toLocaleDateString()}</p>
+                <h3 className="text-xl font-black text-white tracking-tight flex items-center gap-3">
+                  <span className="text-indigo-500">{selectedPo.po_number}</span>
+                  Purchase Order
+                </h3>
+                <p className="text-[10px] text-slate-400 mt-1 uppercase font-bold tracking-widest">{selectedPo.supplier_name} • {new Date(selectedPo.created_at).toLocaleDateString()}</p>
               </div>
-              <button onClick={() => setSelectedPo(null)} className="text-slate-400 hover:text-white">✕</button>
+              <button onClick={() => setSelectedPo(null)} className="text-slate-400 hover:text-white transition-colors"><X size={24}/></button>
             </div>
-            <div className="p-6">
-              <Table className="table-base">
-                <thead>
+            
+            <div className="p-0 overflow-y-auto max-h-[60vh]">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-black/40 text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/5">
                   <tr>
-                    <th>Item</th>
-                    <th className="text-center">Qty</th>
-                    <th className="text-right">Cost</th>
-                    <th className="text-right">Subtotal</th>
+                    <th className="px-6 py-4 font-bold">Product Item</th>
+                    <th className="px-6 py-4 font-bold text-center">Ordered Qty</th>
+                    <th className="px-6 py-4 font-bold text-right">Unit Cost</th>
+                    <th className="px-6 py-4 font-bold text-right">Subtotal</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-white/5">
                   {selectedPo.items.map(i => (
-                    <tr key={i.id}>
-                      <td>{i.item_name}</td>
-                      <td className="text-center">{i.quantity}</td>
-                      <td className="text-right">{i.unit_cost.toLocaleString()}</td>
-                      <td className="text-right font-semibold">{(i.quantity * i.unit_cost).toLocaleString()}</td>
+                    <tr key={i.id} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="px-6 py-4 font-bold text-sm text-slate-200">{i.item_name}</td>
+                      <td className="px-6 py-4 text-center font-black text-slate-400">{i.quantity}</td>
+                      <td className="px-6 py-4 text-right text-sm text-slate-400">LKR {i.unit_cost.toLocaleString()}</td>
+                      <td className="px-6 py-4 text-right font-black text-white">LKR {(i.quantity * i.unit_cost).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
-              </Table>
-              <div className="mt-6 flex justify-between items-end">
-                <div className="text-xs text-slate-400 italic">
-                  Note: {selectedPo.note || "No notes"}
-                </div>
-                <div className="text-right">
-                  <p className="text-slate-400 text-xs">Grand Total</p>
-                  <p className="text-3xl font-bold text-emerald-400">LKR {selectedPo.total_cost.toLocaleString()}</p>
-                </div>
+              </table>
+            </div>
+
+            <div className="p-6 bg-white/[0.02] border-t border-white/5 flex justify-between items-center">
+              <div>
+                <p className="text-xs text-slate-500 italic max-w-[200px] truncate">Note: {selectedPo.note || "No notes attached"}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Grand Total</p>
+                <p className="text-3xl font-black text-emerald-400">LKR {selectedPo.total_cost.toLocaleString()}</p>
               </div>
             </div>
-            <div className="p-4 bg-white/5 border-t border-white/10 flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setSelectedPo(null)}>Close</Button>
+
+            <div className="p-6 border-t border-white/5 bg-black/20 flex justify-end gap-3">
+              <button onClick={() => setSelectedPo(null)} className="px-6 py-3 rounded-xl font-bold text-slate-300 bg-white/5 hover:bg-white/10 transition-colors">Close</button>
               {selectedPo.status !== "Received" && (
-                <Button onClick={() => receivePo(selectedPo.id)}>Receive Items (Update Stock)</Button>
+                <button onClick={() => receivePo(selectedPo.id)} className="px-8 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-900/50 transition-all flex items-center gap-2">
+                  <PackageCheck size={18}/> Execute GRN (Receive Goods)
+                </button>
               )}
             </div>
           </div>

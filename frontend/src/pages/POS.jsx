@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { useFetch } from "../hooks/useFetch";
 import { Badge, Input, Select } from "../components/UI";
-import { Barcode, Calculator, CreditCard, Percent, ShoppingBasket, Search, Printer, Trash2, Plus, Minus, User, Wrench, AlertTriangle, Clock } from "lucide-react";
+import { Barcode, Calculator, CreditCard, Percent, ShoppingBasket, Search, Printer, Trash2, Plus, Minus, User, Wrench, AlertTriangle, Clock, CornerUpLeft, X, RefreshCw } from "lucide-react";
 import { useFeedback } from "../components/FeedbackProvider";
 
 const CATEGORIES = ["All", "Smartphones", "Used Phones", "Chargers", "Earphones", "Power Banks", "Cases & Covers", "Tempered Glass", "Spare Parts", "Repair Services"];
@@ -64,6 +64,12 @@ export default function POS() {
   }, [cashReceived, grandTotal, paid, paymentMethod]);
 
   const [lastSale, setLastSale] = useState(null);
+  
+  // Return Modal State
+  const [returnModalSale, setReturnModalSale] = useState(null);
+  const [returnLines, setReturnLines] = useState([]);
+  const [returnNote, setReturnNote] = useState("");
+  const [isReturning, setIsReturning] = useState(false);
 
   useEffect(() => {
     api.get('/settings/print-profile').then((res) => setProfile({ ...defaultProfile, ...res.data })).catch(() => {});
@@ -155,6 +161,44 @@ export default function POS() {
       inventoryFetch.refresh();
     } catch (err) {
       toast(err.response?.data?.detail || "Checkout failed", "error");
+    }
+  };
+
+  const openReturnModal = async (saleId) => {
+    try {
+      const { data } = await api.get(`/pos/sales/${saleId}`);
+      if (data.is_voided) return toast("Cannot return a voided sale", "warning");
+      setReturnModalSale(data);
+      setReturnLines(data.lines.map(l => ({ ...l, return_qty: 0 })));
+      setReturnNote("");
+    } catch (e) {
+      toast("Failed to load sale details", "error");
+    }
+  };
+
+  const submitReturn = async () => {
+    const linesToReturn = returnLines.filter(l => l.return_qty > 0).map(l => ({
+      item_id: l.item_id,
+      quantity: l.return_qty,
+      price: l.price
+    }));
+    if (linesToReturn.length === 0) return toast("No items selected to return", "warning");
+    
+    setIsReturning(true);
+    try {
+      await api.post('/pos/return', {
+        sale_id: returnModalSale.id,
+        lines: linesToReturn,
+        note: returnNote
+      });
+      toast("Return processed successfully", "success");
+      setReturnModalSale(null);
+      salesFetch.refresh();
+      inventoryFetch.refresh();
+    } catch (e) {
+      toast(e.response?.data?.detail || "Return failed", "error");
+    } finally {
+      setIsReturning(false);
     }
   };
 
@@ -526,6 +570,12 @@ export default function POS() {
                       {s.payment_method}
                     </span>
                   </div>
+                  {!s.is_voided && !s.is_return && (
+                    <button onClick={(e) => { e.stopPropagation(); openReturnModal(s.id); }} className="mt-2 w-full flex items-center justify-center gap-1 py-1 rounded bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 text-[10px] font-bold transition-colors">
+                      <CornerUpLeft size={10} /> Process Return
+                    </button>
+                  )}
+                  {s.is_return && <div className="mt-2 text-center text-[9px] font-bold text-rose-500 uppercase">Refunded</div>}
                 </div>
               ))}
             </div>
@@ -534,6 +584,73 @@ export default function POS() {
         </div>
 
       </div>
+
+      {/* RETURN MODAL */}
+      {returnModalSale && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
+              <h2 className="text-lg font-bold text-white flex items-center gap-2"><RefreshCw size={18} className="text-rose-400"/> RMA / Sales Return</h2>
+              <button onClick={() => setReturnModalSale(null)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button>
+            </div>
+            <div className="p-4 flex-1 overflow-y-auto">
+              <p className="text-sm text-slate-400 mb-4">Original Invoice: <span className="text-white font-bold">{returnModalSale.invoice_no}</span></p>
+              
+              <div className="space-y-3">
+                {returnLines.map((line, idx) => (
+                  <div key={idx} className="bg-black/30 border border-white/5 rounded-xl p-3 flex justify-between items-center">
+                    <div>
+                      <p className="text-sm font-bold text-slate-200">{line.name}</p>
+                      <p className="text-xs text-slate-500">Max returnable: {line.quantity}</p>
+                    </div>
+                    <div className="flex items-center gap-2 bg-black/50 rounded-lg p-1">
+                      <button 
+                        onClick={() => setReturnLines(prev => prev.map((l, i) => i === idx ? {...l, return_qty: Math.max(0, l.return_qty - 1)} : l))}
+                        className="p-1 text-slate-400 hover:text-white hover:bg-white/10 rounded"
+                      >
+                        <Minus size={14}/>
+                      </button>
+                      <span className="w-6 text-center font-bold text-sm text-rose-400">{line.return_qty}</span>
+                      <button 
+                        onClick={() => setReturnLines(prev => prev.map((l, i) => i === idx ? {...l, return_qty: Math.min(l.quantity, l.return_qty + 1)} : l))}
+                        className="p-1 text-slate-400 hover:text-white hover:bg-white/10 rounded"
+                      >
+                        <Plus size={14}/>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4">
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Return Reason / Note</label>
+                <input 
+                  type="text" 
+                  className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-rose-500" 
+                  placeholder="e.g. Customer changed mind, defective..."
+                  value={returnNote}
+                  onChange={e => setReturnNote(e.target.value)}
+                />
+              </div>
+
+              <div className="mt-4 p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-center">
+                <p className="text-xs text-rose-300 font-bold uppercase">Total Refund Amount</p>
+                <p className="text-2xl font-black text-rose-400">
+                  LKR {returnLines.reduce((acc, l) => acc + (l.return_qty * l.price), 0).toLocaleString()}
+                </p>
+              </div>
+
+            </div>
+            <div className="p-4 border-t border-white/10 bg-black/20 flex gap-3">
+              <button onClick={() => setReturnModalSale(null)} className="flex-1 py-2.5 rounded-xl font-bold text-slate-300 bg-white/5 hover:bg-white/10 transition-colors">Cancel</button>
+              <button onClick={submitReturn} disabled={isReturning} className="flex-1 py-2.5 rounded-xl font-bold text-white bg-rose-600 hover:bg-rose-500 shadow-lg shadow-rose-900/50 transition-all disabled:opacity-50">
+                {isReturning ? "Processing..." : "Issue Refund"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

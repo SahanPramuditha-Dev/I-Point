@@ -19,6 +19,13 @@ def create_customer(payload: CustomerIn, db: Session = Depends(get_db), _=Depend
     db.refresh(c)
     return c
 
+@router.get('/{customer_id}')
+def get_customer(customer_id: int, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    c = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return c
+
 @router.put('/{customer_id}')
 def update_customer(customer_id: int, payload: CustomerIn, db: Session = Depends(get_db), _=Depends(get_current_user)):
     c = db.query(Customer).filter(Customer.id == customer_id).first()

@@ -52,7 +52,7 @@ def get_repair_stats(db: Session = Depends(get_db), _=Depends(get_current_user))
 
 @router.post('')
 def create_repair(payload: RepairIn, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    from app.models import RepairHistory
+    from app.models import RepairHistory, Sale
     ticket = RepairTicket(
         ticket_no=f"R-{int(db.query(RepairTicket).count()) + 1001}",
         **payload.model_dump()
@@ -60,6 +60,18 @@ def create_repair(payload: RepairIn, db: Session = Depends(get_db), _=Depends(ge
     db.add(ticket)
     db.flush()
     db.add(RepairHistory(repair_id=ticket.id, status="Intake", note="Device received for repair."))
+    
+    if payload.advance_payment > 0:
+        sale = Sale(
+            customer_id=payload.customer_id,
+            subtotal=payload.advance_payment,
+            total=payload.advance_payment,
+            payment_method="Cash",
+            paid=True,
+            is_return=False
+        )
+        db.add(sale)
+
     db.commit()
     db.refresh(ticket)
     return {
@@ -298,6 +310,9 @@ def generate_job_card_pdf(repair_id: int, db: Session = Depends(get_db), _=Depen
     pdf.set_draw_color(199, 210, 254) # Indigo 200
     
     box_height = 28 if parts else 20
+    if repair.advance_payment > 0:
+        box_height += 16
+        
     pdf.rect(15, pdf.get_y(), 180, box_height, style="DF")
     
     y_start = pdf.get_y() + 6
@@ -319,6 +334,23 @@ def generate_job_card_pdf(repair_id: int, db: Session = Depends(get_db), _=Depen
         pdf.set_font("Helvetica", "B", 16)
         pdf.set_text_color(15, 23, 42)
         pdf.cell(80, 8, f"LKR {grand_total:,.0f}", align="R", ln=True)
+        
+    if repair.advance_payment > 0:
+        pdf.set_xy(20, pdf.get_y() + 2)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(34, 197, 94) # Green
+        pdf.cell(90, 6, "ADVANCE DEPOSIT PAID:")
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_text_color(34, 197, 94)
+        pdf.cell(80, 6, f"- LKR {repair.advance_payment:,.0f}", align="R", ln=True)
+        
+        pdf.set_xy(20, pdf.get_y() + 2)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_text_color(220, 38, 38) # Red
+        pdf.cell(90, 6, "BALANCE DUE:")
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(220, 38, 38)
+        pdf.cell(80, 6, f"LKR {(grand_total - repair.advance_payment):,.0f}", align="R", ln=True)
 
     pdf.ln(15 if not parts else 10)
 
