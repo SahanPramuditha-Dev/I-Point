@@ -12,25 +12,23 @@ export default function CustomerDetail() {
   const { toast, confirm } = useFeedback();
 
   const { data: customer, setData: setCustomer, loading: cLoading } = useFetch(`/customers/${id}`);
-  const { data: sales, loading: sLoading } = useFetch(`/pos/sales`);
-  const { data: repairs, loading: rLoading } = useFetch(`/repairs`);
+  const { data: sales, loading: sLoading } = useFetch(`/customers/${id}/sales`);
+  const { data: repairs, loading: rLoading } = useFetch(`/customers/${id}/repairs`);
 
   const [activeTab, setActiveTab] = useState("repairs");
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState(null);
 
-  const customerSales = useMemo(() => 
-    (sales || []).filter(s => s.customer_id === Number(id)), 
-  [sales, id]);
+  const customerSales = useMemo(() => sales || [], [sales]);
 
-  const customerRepairs = useMemo(() => 
-    (repairs || []).filter(r => r.customer_id === Number(id)), 
-  [repairs, id]);
+  const customerRepairs = useMemo(() => repairs || [], [repairs]);
 
   const stats = useMemo(() => {
-    const totalSpent = customerSales.reduce((sum, s) => sum + s.total, 0);
+    const totalSpent = customerSales
+      .filter((s) => !s.is_voided && !s.is_return)
+      .reduce((sum, s) => sum + (s.total || 0), 0);
     const pendingPayments = customerRepairs.filter(r => r.status !== "Delivered" && r.status !== "Cancelled")
-                                           .reduce((sum, r) => sum + (r.estimated_cost - r.advance_payment), 0);
+                                           .reduce((sum, r) => sum + Math.max(0, (r.estimated_cost || 0) - (r.advance_payment || 0)), 0);
     return {
       totalSpent,
       pendingPayments,
@@ -124,14 +122,14 @@ export default function CustomerDetail() {
                  <div className="text-violet-400 shrink-0"><Mail size={16} /></div>
                  <div className="min-w-0">
                    <p className="text-[9px] text-slate-500 uppercase tracking-widest font-bold">Email Address</p>
-                   <p className="text-sm text-slate-200 font-bold truncate">{customer.email || "—"}</p>
+                   <p className="text-sm text-slate-200 font-bold truncate">{customer.email || "-"}</p>
                  </div>
                </div>
                <div className="flex items-center gap-3 p-4 rounded-2xl bg-black/20 border border-white/5 hover:bg-black/40 transition-colors">
                  <div className="text-emerald-400 shrink-0"><MapPin size={16} /></div>
                  <div className="min-w-0">
                    <p className="text-[9px] text-slate-500 uppercase tracking-widest font-bold">Physical Address</p>
-                   <p className="text-sm text-slate-200 font-bold truncate">{customer.address || "—"}</p>
+                   <p className="text-sm text-slate-200 font-bold truncate">{customer.address || "-"}</p>
                  </div>
                </div>
              </div>
@@ -187,7 +185,7 @@ export default function CustomerDetail() {
                         </td>
                         <td className="text-right">
                            <div className="font-black text-slate-200 text-sm">LKR {r.estimated_cost.toLocaleString()}</div>
-                           {r.advance_payment > 0 && <div className="text-[10px] font-bold text-emerald-500">Paid: {r.advance_payment}</div>}
+                           {r.advance_payment > 0 && <div className="text-[10px] font-bold text-emerald-500">Paid: LKR {r.advance_payment.toLocaleString()}</div>}
                         </td>
                       </tr>
                     ))}

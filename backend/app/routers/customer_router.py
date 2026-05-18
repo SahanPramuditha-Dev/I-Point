@@ -57,8 +57,26 @@ def customer_history(customer_id: int, db: Session = Depends(get_db), _=Depends(
             "name": customer.name,
             "phone": customer.phone,
             "email": customer.email,
-            "address": customer.address
+            "address": customer.address,
+            "notes": customer.notes,
+            "birthday": customer.birthday.isoformat() if customer.birthday else None,
         } if customer else None,
         "sales": [{"id": s.id, "total": s.total, "payment_method": s.payment_method, "created_at": s.created_at.isoformat()} for s in sales],
         "repairs": [{"id": r.id, "ticket_no": r.ticket_no, "status": r.status, "device_model": r.device_model, "created_at": r.created_at.isoformat()} for r in repairs]
     }
+
+@router.get('/{customer_id}/sales')
+def customer_sales(customer_id: int, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    sales = db.query(Sale).filter(Sale.customer_id == customer_id).order_by(Sale.created_at.desc()).all()
+    return sales
+
+@router.get('/{customer_id}/repairs')
+def customer_repairs(customer_id: int, db: Session = Depends(get_db), _=Depends(get_current_user)):
+    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    repairs = db.query(RepairTicket).filter(RepairTicket.customer_id == customer_id).order_by(RepairTicket.created_at.desc()).all()
+    return repairs

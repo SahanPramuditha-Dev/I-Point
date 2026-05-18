@@ -1,0 +1,339 @@
+.exact-login-shell {
+  min-height: 100vh;
+  width: 100%;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background:
+    radial-gradient(1200px 620px at 6% 12%, rgba(116, 90, 244, 0.14), transparent 60%),
+    radial-gradient(760px 520px at 94% 92%, rgba(90, 72, 188, 0.16), transparent 54%),
+    #1a1822;
+}
+
+.exact-login-window {
+  width: min(1188px, 100%);
+  min-height: 716px;
+  border-radius: 28px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: #262433;
+  box-shadow:
+    0 34px 84px rgba(8, 7, 15, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.exact-login-visual {
+  position: relative;
+  background-image:
+    linear-gradient(180deg, rgba(18, 16, 29, 0.12) 0%, rgba(17, 15, 28, 0.5) 72%, rgba(16, 14, 25, 0.74) 100%),
+    url("/login-bg.png");
+  background-size: cover;
+  background-position: center;
+  padding: 52px 46px 40px;
+}
+
+.exact-login-brand {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: #eef1ff;
+  text-shadow: 0 2px 14px rgba(7, 7, 20, 0.45);
+}
+
+.exact-login-copy {
+  position: absolute;
+  left: 46px;
+  right: 46px;
+  bottom: 114px;
+}
+
+.exact-login-copy h2 {
+  margin: 0;
+  max-width: 430px;
+  font-size: clamp(46px, 5.2vw, 58px);
+  line-height: 0.98;
+  letter-spacing: -0.01em;
+  font-weight: 800;
+  color: #f2f4ff;
+  text-shadow: 0 3px 18px rgba(5, 6, 18, 0.42);
+}
+
+.exact-login-copy p {
+  margin: 16px 0 0;
+  max-width: 430px;
+  font-family: "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.56;
+  font-weight: 650;
+  color: rgba(239, 242, 255, 0.94);
+  text-shadow: 0 2px 12px rgba(4, 5, 14, 0.38);
+}
+
+.exact-login-dots {
+  position: absolute;
+  left: 50%;
+  bottom: 76px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.exact-login-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.exact-login-dots span.active {
+  width: 36px;
+  background: #8f6dfd;
+}
+
+.exact-login-auth {
+  background: #262433;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 40px;
+}
+
+.exact-login-form-shell {
+  width: min(432px, 100%);
+}
+
+.exact-login-head h1 {
+  margin: 0;
+  color: #edf0ff;
+  font-size: clamp(42px, 4.4vw, 56px);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  font-weight: 800;
+}
+
+.exact-login-head p {
+  margin: 14px 0 0;
+  font-size: 16px;
+  line-height: 1.45;
+  color: rgba(226, 230, 244, 0.92);
+  font-weight: 600;
+  font-family: "Segoe UI", sans-serif;
+}
+
+.exact-login-head a {
+  color: #ab92ff;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.exact-login-form {
+  margin-top: 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.exact-login-field {
+  position: relative;
+  display: block;
+}
+
+.exact-login-field input {
+  width: 100%;
+  height: 56px;
+  padding: 0 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 126, 155, 0.3);
+  background: rgba(63, 65, 87, 0.36);
+  color: #eff2ff;
+  font-size: 16px;
+  line-height: 1;
+  font-weight: 600;
+  font-family: "Segoe UI", sans-serif;
+}
+
+.exact-login-field input::placeholder {
+  color: rgba(194, 200, 222, 0.66);
+}
+
+.exact-login-field input:focus {
+  outline: none;
+  border-color: rgba(152, 134, 255, 0.82);
+  box-shadow: 0 0 0 3px rgba(146, 118, 255, 0.16);
+}
+
+.exact-login-password input {
+  padding-right: 54px;
+}
+
+.exact-login-eye {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: rgba(190, 194, 218, 0.84);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.exact-login-remember {
+  margin-top: 2px;
+  width: fit-content;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  color: rgba(228, 230, 239, 0.88);
+  font-size: 15px;
+  font-weight: 700;
+  font-family: "Segoe UI", sans-serif;
+  user-select: none;
+}
+
+.exact-login-remember input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border-radius: 6px;
+  accent-color: #8f6dfd;
+}
+
+.exact-login-error {
+  color: #fca5a5;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.exact-login-submit {
+  margin-top: 10px;
+  height: 56px;
+  border: 0;
+  border-radius: 14px;
+  background: linear-gradient(90deg, #7b5ce8 0%, #8b69f5 100%);
+  color: #10193d;
+  font-size: 18px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 14px 30px rgba(115, 88, 236, 0.34);
+  transition: transform 0.15s ease, filter 0.2s ease;
+}
+
+.exact-login-submit:hover:enabled {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.exact-login-submit:disabled {
+  opacity: 0.66;
+  cursor: not-allowed;
+}
+
+.exact-login-divider {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: rgba(202, 207, 225, 0.82);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.exact-login-divider::before,
+.exact-login-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: rgba(117, 122, 151, 0.42);
+}
+
+.exact-login-google {
+  height: 56px;
+  border-radius: 14px;
+  border: 1px solid rgba(123, 128, 157, 0.34);
+  background: rgba(47, 49, 69, 0.36);
+  color: #dce2ff;
+  font-size: 18px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: not-allowed;
+}
+
+.exact-login-google svg {
+  width: 20px;
+  height: 20px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+@media (max-width: 1100px) {
+  .exact-login-shell {
+    padding: 16px;
+  }
+
+  .exact-login-window {
+    min-height: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .exact-login-visual {
+    min-height: 360px;
+    padding: 26px;
+  }
+
+  .exact-login-copy {
+    left: 26px;
+    right: 26px;
+    bottom: 74px;
+  }
+
+  .exact-login-copy h2 {
+    max-width: 100%;
+    font-size: clamp(30px, 9vw, 44px);
+  }
+
+  .exact-login-copy p {
+    max-width: 100%;
+    font-size: clamp(14px, 3.8vw, 18px);
+  }
+
+  .exact-login-dots {
+    bottom: 30px;
+  }
+
+  .exact-login-auth {
+    padding: 30px 20px 32px;
+  }
+
+  .exact-login-form-shell {
+    width: min(560px, 100%);
+  }
+
+  .exact-login-head h1 {
+    font-size: clamp(36px, 10vw, 48px);
+  }
+
+  .exact-login-head p {
+    font-size: clamp(14px, 4vw, 18px);
+  }
+}

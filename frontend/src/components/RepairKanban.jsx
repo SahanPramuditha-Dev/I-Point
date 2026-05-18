@@ -1,51 +1,122 @@
 import { Badge } from "../components/UI";
+import { Phone, Wrench, CheckCircle2, PackagePlus, ClipboardPlus } from "lucide-react";
 
 const COLUMNS = [
   "Pending",
   "Diagnosing",
-  "Waiting for Approval",
-  "Waiting for Parts",
+  "Waiting for parts",
   "Repairing",
   "Quality Checking",
   "Completed",
   "Delivered"
 ];
 
-export default function RepairKanban({ repairs, onStatusChange, onViewDetails }) {
+function priorityTone(priority) {
+  if (priority === "Urgent") return "red";
+  if (priority === "High") return "amber";
+  if (priority === "Low") return "sky";
+  return "slate";
+}
+
+function statusAccent(status) {
+  if (status === "Completed") return "text-emerald-400";
+  if (status === "Repairing") return "text-sky-400";
+  if (status === "Waiting for parts") return "text-amber-400";
+  if (status === "Pending") return "text-indigo-300";
+  if (status === "Delivered") return "text-emerald-300";
+  return "text-slate-400";
+}
+
+export default function RepairKanban({ repairs, onStatusChange, onViewDetails, onQuickAction }) {
   const getTasksByStatus = (status) => (repairs || []).filter(r => r.status === status);
 
   return (
-    <div className="flex gap-4 overflow-x-auto pb-4 min-h-[600px] scrollbar-thin scrollbar-thumb-white/10">
+    <div className="flex gap-3 overflow-x-auto pb-2 min-h-[560px] scrollbar-thin scrollbar-thumb-white/10">
       {COLUMNS.map(col => (
-        <div key={col} className="w-80 shrink-0 flex flex-col">
+        <div key={col} className="w-[320px] shrink-0 flex flex-col">
           <div className="flex items-center justify-between px-3 py-2 mb-3 bg-black/5 dark:bg-white/5 rounded-lg border border-black/5 dark:border-white/5">
             <span className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">{col}</span>
             <Badge tone="sky" className="px-1.5 py-0.5">{getTasksByStatus(col).length}</Badge>
           </div>
-          <div className="flex-1 space-y-3">
+          <div
+            className="flex-1 space-y-3"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              const id = Number(e.dataTransfer.getData("ticket_id"));
+              if (!id) return;
+              onStatusChange?.(id, col);
+            }}
+          >
             {getTasksByStatus(col).map(r => (
               <div 
                 key={r.id} 
-                className="p-4 bg-white dark:bg-[#12182a] border border-black/5 dark:border-white/5 rounded-xl hover:border-indigo-500/50 transition cursor-pointer shadow-sm dark:shadow-lg group"
+                className="p-3 bg-white dark:bg-[#12182a] border border-black/5 dark:border-white/5 rounded-xl hover:border-indigo-500/50 transition cursor-pointer shadow-sm dark:shadow-lg group"
                 onClick={() => onViewDetails(r)}
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData("ticket_id", String(r.id))}
               >
-                <div className="flex justify-between items-start mb-2">
+                <div className="flex justify-between items-start mb-1">
                   <span className="text-[10px] font-mono text-indigo-400 font-bold">{r.ticket_no}</span>
-                  <Badge tone={r.priority === "Urgent" ? "red" : r.priority === "High" ? "amber" : "slate"}>
-                    {r.priority}
+                  <Badge tone={priorityTone(r.priority)} className="text-[9px] px-2 py-0.5">
+                    {(r.priority || "Normal").toUpperCase()}
                   </Badge>
                 </div>
-                <h4 className="font-bold text-sm text-white mb-1 group-hover:text-indigo-300 transition">{r.device_model}</h4>
-                <p className="text-xs text-slate-400 line-clamp-2 mb-3">{r.issue}</p>
+                <h4 className="font-bold text-sm text-white mb-1 group-hover:text-indigo-300 transition">{r.customer_name || "Walk-in Customer"}</h4>
+                <p className="text-[11px] text-slate-400 mb-1">{r.customer_phone || "No phone"}</p>
+                <p className="text-xs font-semibold text-slate-200 mb-1">{r.device_model}</p>
+                <p className="text-[11px] text-slate-500 mb-2 line-clamp-2">{r.issue}</p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className={`text-[10px] font-black uppercase tracking-wider ${statusAccent(r.status)}`}>{r.status}</p>
+                  <p className="text-[10px] text-slate-500">IMEI: {(r.imei || "N/A").slice(0, 8)}</p>
+                </div>
                 
-                <div className="flex items-center justify-between pt-3 border-t border-white/5">
+                <div className="flex items-center justify-between pt-2 border-t border-white/5">
                   <div className="flex items-center gap-2">
                     <div className="w-6 h-6 rounded-full bg-gradient-to-br from-sky-400 to-indigo-500 flex items-center justify-center text-[10px] text-white font-bold">
                       {r.technician?.slice(0, 2).toUpperCase() || "??"}
                     </div>
                     <span className="text-[10px] text-slate-500 font-medium">{r.technician || "Unassigned"}</span>
                   </div>
-                  <span className="text-[10px] font-bold text-emerald-400">LKR {r.estimated_cost.toLocaleString()}</span>
+                  <span className="text-[10px] font-bold text-emerald-400">LKR {(r.estimated_cost || 0).toLocaleString()}</span>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-1.5">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onQuickAction?.("start", r); }}
+                    className="h-7 rounded-md bg-white/5 hover:bg-sky-500/20 text-[10px] font-bold text-sky-200 inline-flex items-center justify-center gap-1"
+                    title="Start Repair"
+                  >
+                    <Wrench size={11} /> Start
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onQuickAction?.("parts", r); }}
+                    className="h-7 rounded-md bg-white/5 hover:bg-amber-500/20 text-[10px] font-bold text-amber-200 inline-flex items-center justify-center gap-1"
+                    title="Add Parts"
+                  >
+                    <PackagePlus size={11} /> Parts
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onQuickAction?.("ready", r); }}
+                    className="h-7 rounded-md bg-white/5 hover:bg-emerald-500/20 text-[10px] font-bold text-emerald-200 inline-flex items-center justify-center gap-1"
+                    title="Mark Ready"
+                  >
+                    <CheckCircle2 size={11} /> Ready
+                  </button>
+                </div>
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onQuickAction?.("note", r); }}
+                    className="h-7 rounded-md bg-white/5 hover:bg-indigo-500/20 text-[10px] font-bold text-indigo-200 inline-flex items-center justify-center gap-1"
+                    title="Add Notes"
+                  >
+                    <ClipboardPlus size={11} /> Note
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onQuickAction?.("call", r); }}
+                    className="h-7 rounded-md bg-white/5 hover:bg-cyan-500/20 text-[10px] font-bold text-cyan-200 inline-flex items-center justify-center gap-1"
+                    title="Call Customer"
+                  >
+                    <Phone size={11} /> Call
+                  </button>
                 </div>
               </div>
             ))}

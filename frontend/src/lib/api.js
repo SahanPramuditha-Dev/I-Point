@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+  baseURL: import.meta.env.VITE_API_URL || "http://127.0.0.1:8001"
 });
 
 api.interceptors.request.use((config) => {
@@ -16,6 +16,10 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem("token");
       localStorage.removeItem("username");
+      localStorage.removeItem("permissions");
+      localStorage.removeItem("session_id");
+      localStorage.removeItem("login_role");
+      localStorage.removeItem("login_role_label");
       if (typeof window !== "undefined" && window.location.pathname !== "/login") {
         window.location.href = "/login";
       }

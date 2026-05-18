@@ -2,148 +2,217 @@ import { useState } from "react";
 import { useFetch } from "../hooks/useFetch";
 import api from "../lib/api";
 import { Badge } from "../components/UI";
-import { ShoppingBag, Truck, PackageCheck, History, Plus, X, List, Calendar } from "lucide-react";
+import { Calendar, History, PackageCheck, Plus, ShoppingBag, Truck, X } from "lucide-react";
 import { useFeedback } from "../components/FeedbackProvider";
+
+function emptyDraft() {
+  return { supplier_id: "", note: "", items: [] };
+}
+
+function emptyDraftItem() {
+  return { item_id: "", quantity: 1, unit_cost: "" };
+}
 
 export default function PurchaseOrders() {
   const { toast, confirm } = useFeedback();
-  const { data: pos, setData: setPos, loading } = useFetch('/purchase');
-  const { data: suppliers } = useFetch('/inventory/suppliers');
-  const { data: inventory } = useFetch('/inventory');
+  const { data: pos, setData: setPos, loading } = useFetch("/purchase");
+  const { data: suppliers } = useFetch("/inventory/suppliers");
+  const { data: inventory } = useFetch("/inventory");
 
   const [isCreating, setIsCreating] = useState(false);
   const [selectedPo, setSelectedPo] = useState(null);
-  const [form, setForm] = useState({ supplier_id: "", note: "", items: [] });
-  const [newItem, setNewItem] = useState({ item_id: "", quantity: 1, unit_cost: "" });
+  const [draft, setDraft] = useState(emptyDraft());
+  const [draftItem, setDraftItem] = useState(emptyDraftItem());
+  const [reconcile, setReconcile] = useState({ invoice_no: "", note: "", lines: [] });
 
   const addPoItem = () => {
-    if (!newItem.item_id) return;
-    const inv = inventory?.find(i => i.id === Number(newItem.item_id));
-    setForm(f => ({
-      ...f,
-      items: [...f.items, { ...newItem, item_id: Number(newItem.item_id), item_name: inv?.name }]
+    if (!draftItem.item_id) return;
+    const inventoryItem = (inventory || []).find((row) => row.id === Number(draftItem.item_id));
+    setDraft((prev) => ({
+      ...prev,
+      items: [
+        ...prev.items,
+        {
+          item_id: Number(draftItem.item_id),
+          quantity: Number(draftItem.quantity || 0),
+          unit_cost: Number(draftItem.unit_cost || 0),
+          item_name: inventoryItem?.name || "",
+        },
+      ],
     }));
-    setNewItem({ item_id: "", quantity: 1, unit_cost: "" });
+    setDraftItem(emptyDraftItem());
   };
 
   const removePoItem = (idx) => {
-    setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
+    setDraft((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== idx) }));
   };
 
   const submitPo = async () => {
-    if (!form.supplier_id || form.items.length === 0) return toast("Please select supplier and add items", "warning");
+    if (!draft.supplier_id || draft.items.length === 0) {
+      toast("Please select supplier and add at least one line", "warning");
+      return;
+    }
     try {
-      const { data: newPo } = await api.post('/purchase', {
-        supplier_id: Number(form.supplier_id),
-        note: form.note,
-        items: form.items.map(i => ({ item_id: i.item_id, quantity: i.quantity, unit_cost: i.unit_cost }))
-      });
-      setPos([newPo, ...(pos || [])]);
+      const payload = {
+        supplier_id: Number(draft.supplier_id),
+        note: draft.note || null,
+        items: draft.items.map((row) => ({
+          item_id: Number(row.item_id),
+          quantity: Number(row.quantity || 0),
+          unit_cost: Number(row.unit_cost || 0),
+        })),
+      };
+      const { data: created } = await api.post("/purchase", payload);
+      setPos([created, ...(pos || [])]);
       setIsCreating(false);
-      setForm({ supplier_id: "", note: "", items: [] });
+      setDraft(emptyDraft());
       toast("Purchase order drafted successfully", "success");
-    } catch (err) {
+    } catch {
       toast("Failed to create PO", "error");
     }
+  };
+
+  const refreshPoList = async () => {
+    const { data } = await api.get("/purchase");
+    setPos(data || []);
   };
 
   const viewPo = async (poId) => {
     try {
       const { data: details } = await api.get(`/purchase/${poId}`);
       setSelectedPo(details);
-    } catch (err) {
+      setReconcile({
+        invoice_no: "",
+        note: "",
+        lines: (details.items || []).map((line) => ({
+          item_id: line.item_id,
+          received_qty: Number(line.quantity || 0),
+          damaged_qty: 0,
+          unit_cost: Number(line.unit_cost || 0),
+        })),
+      });
+    } catch {
       toast("Failed to load PO details", "error");
     }
   };
 
-  const receivePo = async (poId) => {
-    const ok = await confirm("Receive Goods (GRN)", "This will finalize the PO and add items to your main inventory. Continue?");
+  const receivePoQuick = async (poId) => {
+    const ok = await confirm("Auto Receive PO", "Receive full ordered quantities and create linked GRN?");
     if (!ok) return;
     try {
       await api.post(`/purchase/${poId}/receive`);
-      toast("Goods Received Note processed! Stock updated.", "success");
-      const { data: updatedPos } = await api.get('/purchase');
-      setPos(updatedPos);
-      setSelectedPo(null);
-    } catch (err) {
-      toast("Failed to receive PO", "error");
+      await refreshPoList();
+      await viewPo(poId);
+      toast("PO received and linked GRN created", "success");
+    } catch (error) {
+      toast(error.response?.data?.detail || "Failed to receive PO", "error");
     }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64 text-slate-400">Loading Purchase Orders...</div>;
+  const reconcilePo = async () => {
+    if (!selectedPo) return;
+    try {
+      const payload = {
+        invoice_no: reconcile.invoice_no || null,
+        note: reconcile.note || null,
+        lines: reconcile.lines.map((line) => ({
+          item_id: Number(line.item_id),
+          received_qty: Number(line.received_qty || 0),
+          damaged_qty: Number(line.damaged_qty || 0),
+          unit_cost: Number(line.unit_cost || 0),
+        })),
+      };
+      await api.post(`/purchase/${selectedPo.id}/reconcile`, payload);
+      await refreshPoList();
+      await viewPo(selectedPo.id);
+      toast("PO reconciled with GRN successfully", "success");
+    } catch (error) {
+      toast(error.response?.data?.detail || "Failed to reconcile PO", "error");
+    }
+  };
+
+  const updateReconcileLine = (index, patch) => {
+    setReconcile((prev) => {
+      const lines = [...prev.lines];
+      lines[index] = { ...lines[index], ...patch };
+      return { ...prev, lines };
+    });
+  };
+
+  if (loading) return <div className="flex h-64 items-center justify-center text-slate-400">Loading Purchase Orders...</div>;
 
   return (
-    <div className="flex flex-col h-full gap-4 pb-4">
-      {/* HEADER SECTION */}
-      <div className="flex justify-between items-end shrink-0">
+    <div className="flex h-full flex-col gap-4 pb-4">
+      <div className="flex shrink-0 items-end justify-between">
         <div>
-          <h1 className="text-2xl font-black tracking-tight text-white">Purchase Orders & GRN</h1>
-          <p className="text-xs text-slate-400 mt-1">Manage supplier orders, tracking and goods intake</p>
+          <h1 className="text-2xl font-black tracking-tight text-white">Purchase Orders & GRN Reconciliation</h1>
+          <p className="mt-1 text-xs text-slate-400">Create POs, reconcile against received quantities, and track linked GRNs.</p>
         </div>
-        <button onClick={() => setIsCreating(true)} className="px-5 py-2.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-900/20 transition-all flex items-center gap-2">
-          <Plus size={14}/> Draft Purchase Order
+        <button onClick={() => setIsCreating(true)} className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-900/20 transition-all hover:bg-indigo-500">
+          <Plus size={14} /> Draft Purchase Order
         </button>
       </div>
 
-      {/* MAIN TABLE PANEL */}
-      <div className="flex-1 bg-slate-900/60 backdrop-blur-md border border-white/10 rounded-2xl flex flex-col overflow-hidden shadow-2xl">
-        <div className="p-4 border-b border-white/5 bg-black/20 shrink-0">
-          <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
-            <History size={14}/> Order History & Intake Pipeline
+      <div className="flex flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-900/60 shadow-2xl backdrop-blur-md">
+        <div className="shrink-0 border-b border-white/5 bg-black/20 p-4">
+          <h3 className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+            <History size={14} /> PO / GRN Pipeline
           </h3>
         </div>
-
         <div className="flex-1 overflow-y-auto custom-scrollbar">
-          <table className="w-full text-left border-collapse">
-            <thead className="sticky top-0 bg-slate-950/90 backdrop-blur z-10 text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/10 shadow-sm">
+          <table className="w-full border-collapse text-left">
+            <thead className="sticky top-0 z-10 border-b border-white/10 bg-slate-950/90 text-[10px] uppercase tracking-widest text-slate-500 shadow-sm backdrop-blur">
               <tr>
-                <th className="px-6 py-4 font-bold">PO Tracker Number</th>
-                <th className="px-6 py-4 font-bold">Supplier Info</th>
-                <th className="px-6 py-4 font-bold">Created On</th>
+                <th className="px-6 py-4 font-bold">PO Number</th>
+                <th className="px-6 py-4 font-bold">Supplier</th>
+                <th className="px-6 py-4 font-bold">Created</th>
                 <th className="px-6 py-4 font-bold text-center">Status</th>
-                <th className="px-6 py-4 font-bold text-right">Invoice Value</th>
+                <th className="px-6 py-4 font-bold text-center">GRN</th>
+                <th className="px-6 py-4 font-bold text-right">Value</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {(pos || []).map(p => (
-                <tr key={p.id} onClick={() => viewPo(p.id)} className="hover:bg-white/[0.02] transition-colors cursor-pointer group">
+              {(pos || []).map((po) => (
+                <tr key={po.id} onClick={() => viewPo(po.id)} className="group cursor-pointer transition-colors hover:bg-white/[0.02]">
                   <td className="px-6 py-4">
-                     <div className="flex items-center gap-3">
-                       <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-black text-sm uppercase border border-indigo-500/20">
-                         <PackageCheck size={14} />
-                       </div>
-                       <span className="font-black text-sm text-indigo-300 group-hover:text-indigo-200 transition-colors">{p.po_number}</span>
-                     </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-2 text-slate-300 font-bold text-sm">
-                      <Truck size={14} className="text-slate-500" />
-                      {p.supplier_name || `Supplier #${p.supplier_id}`}
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-indigo-500/20 bg-indigo-500/10 text-sm font-black uppercase text-indigo-400">
+                        <PackageCheck size={14} />
+                      </div>
+                      <span className="text-sm font-black text-indigo-300 transition-colors group-hover:text-indigo-200">{po.po_number}</span>
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-1.5 text-slate-400 text-sm font-medium">
+                    <div className="flex items-center gap-2 text-sm font-bold text-slate-300">
+                      <Truck size={14} className="text-slate-500" />
+                      {po.supplier_name || `Supplier #${po.supplier_id}`}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-1.5 text-sm font-medium text-slate-400">
                       <Calendar size={14} className="text-slate-500" />
-                      {new Date(p.created_at).toLocaleDateString()}
+                      {po.created_at ? new Date(po.created_at).toLocaleDateString() : "-"}
                     </div>
                   </td>
                   <td className="px-6 py-4 text-center">
-                    <Badge tone={p.status === "Received" ? "green" : p.status === "Draft" ? "slate" : "amber"} className="text-[10px] px-2 py-0.5 uppercase tracking-widest">
-                      {p.status}
+                    <Badge tone={po.status === "Received" ? "green" : po.status === "Draft" ? "slate" : "amber"} className="px-2 py-0.5 text-[10px] uppercase tracking-widest">
+                      {po.status}
                     </Badge>
                   </td>
+                  <td className="px-6 py-4 text-center">
+                    <span className="text-xs font-bold text-slate-400">{Number(po.grn_count || 0) > 0 ? (po.grn_numbers || []).join(", ") : "-"}</span>
+                  </td>
                   <td className="px-6 py-4 text-right">
-                    <div className="font-black text-sm text-slate-200">LKR {p.total_cost.toLocaleString()}</div>
-                    <div className="text-[10px] text-indigo-400 mt-1 font-bold tracking-wide group-hover:underline">View GRN →</div>
+                    <div className="text-sm font-black text-slate-200">LKR {Number(po.total_cost || 0).toLocaleString()}</div>
                   </td>
                 </tr>
               ))}
               {(pos || []).length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
-                    <ShoppingBag size={32} className="mx-auto mb-3 opacity-30"/>
+                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                    <ShoppingBag size={32} className="mx-auto mb-3 opacity-30" />
                     <p className="text-sm font-bold">No purchase orders found</p>
-                    <p className="text-xs mt-1">Draft a new order to restock your inventory.</p>
+                    <p className="mt-1 text-xs">Draft a new order to restock your inventory.</p>
                   </td>
                 </tr>
               )}
@@ -152,179 +221,236 @@ export default function PurchaseOrders() {
         </div>
       </div>
 
-      {/* CREATE PO MODAL */}
       {isCreating && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-[#0f172a] border border-white/10 rounded-3xl w-full max-w-5xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
-              <h2 className="text-xl font-black text-white flex items-center gap-2"><Truck size={20} className="text-indigo-400"/> Draft Purchase Order</h2>
-              <button onClick={() => setIsCreating(false)} className="text-slate-400 hover:text-white transition-colors"><X size={20}/></button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in">
+          <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#0f172a] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/5 bg-white/[0.02] p-6">
+              <h2 className="flex items-center gap-2 text-xl font-black text-white">
+                <Truck size={20} className="text-indigo-400" /> Draft Purchase Order
+              </h2>
+              <button onClick={() => setIsCreating(false)} className="text-slate-400 transition-colors hover:text-white">
+                <X size={20} />
+              </button>
             </div>
-            
-            <div className="flex-1 overflow-hidden grid grid-cols-12 gap-0">
-              
-              {/* Left Sidebar - Add Items */}
-              <div className="col-span-4 border-r border-white/5 bg-black/20 p-6 flex flex-col gap-6 overflow-y-auto custom-scrollbar">
+            <div className="grid flex-1 grid-cols-12 gap-0 overflow-hidden">
+              <div className="custom-scrollbar col-span-4 flex flex-col gap-6 overflow-y-auto border-r border-white/5 bg-black/20 p-6">
                 <div>
-                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-1">Select Supplier</label>
-                  <select 
-                    className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-indigo-500" 
-                    value={form.supplier_id} 
-                    onChange={e => setForm({...form, supplier_id: e.target.value})}
-                  >
+                  <label className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-500">Select Supplier</label>
+                  <select className="w-full rounded-xl border border-white/10 bg-black/40 p-3 text-sm text-white focus:border-indigo-500 focus:outline-none" value={draft.supplier_id} onChange={(e) => setDraft({ ...draft, supplier_id: e.target.value })}>
                     <option value="">-- Choose Supplier --</option>
-                    {(suppliers || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {(suppliers || []).map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
-                
                 <div>
-                  <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block mb-1">Internal Note / Ref</label>
-                  <textarea 
-                    className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-indigo-500 resize-none min-h-[80px]" 
-                    value={form.note} 
-                    onChange={e => setForm({...form, note: e.target.value})} 
-                    placeholder="e.g. Order for December stock..." 
-                  />
+                  <label className="mb-1 block text-[10px] font-black uppercase tracking-widest text-slate-500">Internal Note / Ref</label>
+                  <textarea className="min-h-[80px] w-full resize-none rounded-xl border border-white/10 bg-black/40 p-3 text-sm text-white focus:border-indigo-500 focus:outline-none" value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} placeholder="e.g. December stock order" />
                 </div>
-
-                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 flex flex-col gap-4">
-                  <h3 className="text-[10px] font-black uppercase tracking-widest text-indigo-400 flex items-center gap-2"><List size={14}/> Add Item to PO</h3>
-                  
-                  <select 
-                    className="w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white focus:outline-none focus:border-indigo-500" 
-                    value={newItem.item_id} 
-                    onChange={e => setNewItem({...newItem, item_id: e.target.value})}
-                  >
-                    <option value="">Select Inventory Item</option>
-                    {(inventory || []).map(i => <option key={i.id} value={i.id}>{i.name} ({i.quantity} in stock)</option>)}
+                <div className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-indigo-400">Add Item</h3>
+                  <select className="w-full rounded-xl border border-white/10 bg-black/40 p-3 text-sm text-white focus:border-indigo-500 focus:outline-none" value={draftItem.item_id} onChange={(e) => setDraftItem({ ...draftItem, item_id: e.target.value })}>
+                    <option value="">Select inventory item</option>
+                    {(inventory || []).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} ({item.quantity} in stock)
+                      </option>
+                    ))}
                   </select>
-                  
                   <div className="grid grid-cols-2 gap-2">
-                    <div>
-                       <label className="text-[9px] text-slate-500 uppercase font-bold ml-1">Order Qty</label>
-                       <input type="number" className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-center font-bold text-white outline-none" value={newItem.quantity} onChange={e => setNewItem({...newItem, quantity: Number(e.target.value)})} />
-                    </div>
-                    <div>
-                       <label className="text-[9px] text-slate-500 uppercase font-bold ml-1">Unit Cost (LKR)</label>
-                       <input type="number" className="w-full bg-black/40 border border-white/10 rounded-xl p-2 text-center font-bold text-white outline-none" placeholder="0" value={newItem.unit_cost} onChange={e => setNewItem({...newItem, unit_cost: e.target.value})} />
-                    </div>
+                    <input type="number" min="1" value={draftItem.quantity} onChange={(e) => setDraftItem({ ...draftItem, quantity: Number(e.target.value) })} className="rounded-xl border border-white/10 bg-black/40 p-2 text-center font-bold text-white outline-none" placeholder="Qty" />
+                    <input type="number" min="0" value={draftItem.unit_cost} onChange={(e) => setDraftItem({ ...draftItem, unit_cost: e.target.value })} className="rounded-xl border border-white/10 bg-black/40 p-2 text-center font-bold text-white outline-none" placeholder="Unit cost" />
                   </div>
-                  
-                  <button onClick={addPoItem} className="w-full py-2.5 mt-2 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 text-white transition-colors">
-                    Add to Manifest
+                  <button onClick={addPoItem} className="mt-1 rounded-xl bg-white/10 py-2.5 text-xs font-bold text-white transition-colors hover:bg-white/20">
+                    Add to Draft
                   </button>
                 </div>
               </div>
-
-              {/* Right Sidebar - PO Manifest */}
-              <div className="col-span-8 p-6 flex flex-col bg-[#0f172a]">
-                 <div className="flex justify-between items-end mb-4 shrink-0">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">PO Manifest</p>
-                 </div>
-                 
-                 <div className="flex-1 bg-black/20 border border-white/5 rounded-2xl overflow-y-auto custom-scrollbar">
-                    <table className="w-full text-left border-collapse">
-                      <thead className="sticky top-0 bg-slate-900 backdrop-blur text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/5">
-                        <tr>
-                          <th className="px-4 py-3 font-bold">Product</th>
-                          <th className="px-4 py-3 font-bold text-center">Qty</th>
-                          <th className="px-4 py-3 font-bold text-right">Unit Cost</th>
-                          <th className="px-4 py-3 font-bold text-right">Line Total</th>
-                          <th className="px-4 py-3"></th>
+              <div className="col-span-8 flex flex-col bg-[#0f172a] p-6">
+                <p className="mb-4 text-[10px] font-black uppercase tracking-widest text-slate-500">PO Manifest</p>
+                <div className="custom-scrollbar flex-1 overflow-y-auto rounded-2xl border border-white/5 bg-black/20">
+                  <table className="w-full border-collapse text-left">
+                    <thead className="sticky top-0 border-b border-white/5 bg-slate-900 text-[10px] uppercase tracking-widest text-slate-500 backdrop-blur">
+                      <tr>
+                        <th className="px-4 py-3 font-bold">Product</th>
+                        <th className="px-4 py-3 text-center font-bold">Qty</th>
+                        <th className="px-4 py-3 text-right font-bold">Unit Cost</th>
+                        <th className="px-4 py-3 text-right font-bold">Line Total</th>
+                        <th className="px-4 py-3" />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {draft.items.map((item, idx) => (
+                        <tr key={`${item.item_id}-${idx}`} className="transition-colors hover:bg-white/5">
+                          <td className="px-4 py-3 text-sm font-bold text-slate-200">{item.item_name}</td>
+                          <td className="px-4 py-3 text-center text-sm font-black text-slate-400">{item.quantity}</td>
+                          <td className="px-4 py-3 text-right text-sm text-slate-400">LKR {Number(item.unit_cost || 0).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right text-sm font-black text-white">LKR {(Number(item.quantity || 0) * Number(item.unit_cost || 0)).toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right">
+                            <button onClick={() => removePoItem(idx)} className="rounded bg-rose-500/10 p-1 text-rose-400 transition-colors hover:bg-rose-500/20">
+                              <X size={14} />
+                            </button>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-white/5">
-                        {form.items.map((i, idx) => (
-                          <tr key={idx} className="hover:bg-white/5 transition-colors">
-                            <td className="px-4 py-3 font-bold text-sm text-slate-200">{i.item_name}</td>
-                            <td className="px-4 py-3 text-center text-sm font-black text-slate-400">{i.quantity}</td>
-                            <td className="px-4 py-3 text-right text-sm text-slate-400">LKR {Number(i.unit_cost).toLocaleString()}</td>
-                            <td className="px-4 py-3 text-right text-sm font-black text-white">LKR {(i.quantity * Number(i.unit_cost)).toLocaleString()}</td>
-                            <td className="px-4 py-3 text-right">
-                              <button onClick={() => removePoItem(idx)} className="p-1 text-rose-500/50 hover:text-rose-400 bg-rose-500/5 hover:bg-rose-500/10 rounded transition-colors">
-                                <X size={14}/>
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                        {form.items.length === 0 && (
-                           <tr><td colSpan={5} className="text-center py-16 text-slate-500 italic text-sm">No items added to manifest yet.</td></tr>
-                        )}
-                      </tbody>
-                    </table>
-                 </div>
-
-                 <div className="mt-6 flex justify-between items-center shrink-0 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl">
-                    <div>
-                      <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Total Invoice Estimate</p>
-                      <p className="text-3xl font-black text-white mt-1">LKR {form.items.reduce((s, i) => s + (i.quantity * Number(i.unit_cost)), 0).toLocaleString()}</p>
-                    </div>
-                    <button onClick={submitPo} className="px-8 py-4 rounded-xl font-black text-white uppercase tracking-widest text-sm bg-indigo-600 hover:bg-indigo-500 shadow-xl shadow-indigo-900/50 transition-all">
-                      Confirm Draft Order
-                    </button>
-                 </div>
+                      ))}
+                      {draft.items.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="py-16 text-center text-sm italic text-slate-500">
+                            No items added yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-6 flex items-center justify-between rounded-2xl border border-indigo-500/20 bg-indigo-500/10 p-4">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-indigo-400">Total Estimate</p>
+                    <p className="mt-1 text-3xl font-black text-white">LKR {draft.items.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.unit_cost || 0), 0).toLocaleString()}</p>
+                  </div>
+                  <button onClick={submitPo} className="rounded-xl bg-indigo-600 px-8 py-4 text-sm font-black uppercase tracking-widest text-white shadow-xl shadow-indigo-900/50 transition-all hover:bg-indigo-500">
+                    Confirm Draft Order
+                  </button>
+                </div>
               </div>
-
             </div>
           </div>
         </div>
       )}
 
-      {/* VIEW PO MODAL (GRN Processing) */}
       {selectedPo && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-[#0f172a] border border-white/10 rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden">
-            <div className="p-6 border-b border-white/5 flex justify-between items-center bg-white/[0.02]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-in fade-in">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-hidden rounded-3xl border border-white/10 bg-[#0f172a] shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/5 bg-white/[0.02] p-6">
               <div>
-                <h3 className="text-xl font-black text-white tracking-tight flex items-center gap-3">
-                  <span className="text-indigo-500">{selectedPo.po_number}</span>
-                  Purchase Order
+                <h3 className="flex items-center gap-3 text-xl font-black tracking-tight text-white">
+                  <span className="text-indigo-500">{selectedPo.po_number}</span> Purchase Order
                 </h3>
-                <p className="text-[10px] text-slate-400 mt-1 uppercase font-bold tracking-widest">{selectedPo.supplier_name} • {new Date(selectedPo.created_at).toLocaleDateString()}</p>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  {selectedPo.supplier_name} • {selectedPo.created_at ? new Date(selectedPo.created_at).toLocaleDateString() : "-"}
+                </p>
               </div>
-              <button onClick={() => setSelectedPo(null)} className="text-slate-400 hover:text-white transition-colors"><X size={24}/></button>
+              <button onClick={() => setSelectedPo(null)} className="text-slate-400 transition-colors hover:text-white">
+                <X size={24} />
+              </button>
             </div>
-            
-            <div className="p-0 overflow-y-auto max-h-[60vh]">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-black/40 text-[10px] uppercase tracking-widest text-slate-500 border-b border-white/5">
-                  <tr>
-                    <th className="px-6 py-4 font-bold">Product Item</th>
-                    <th className="px-6 py-4 font-bold text-center">Ordered Qty</th>
-                    <th className="px-6 py-4 font-bold text-right">Unit Cost</th>
-                    <th className="px-6 py-4 font-bold text-right">Subtotal</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {selectedPo.items.map(i => (
-                    <tr key={i.id} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="px-6 py-4 font-bold text-sm text-slate-200">{i.item_name}</td>
-                      <td className="px-6 py-4 text-center font-black text-slate-400">{i.quantity}</td>
-                      <td className="px-6 py-4 text-right text-sm text-slate-400">LKR {i.unit_cost.toLocaleString()}</td>
-                      <td className="px-6 py-4 text-right font-black text-white">LKR {(i.quantity * i.unit_cost).toLocaleString()}</td>
+
+            <div className="custom-scrollbar grid max-h-[70vh] grid-cols-1 gap-0 overflow-y-auto md:grid-cols-2">
+              <div className="border-r border-white/5 p-6">
+                <h4 className="mb-3 text-xs font-black uppercase tracking-widest text-slate-400">PO Lines</h4>
+                <table className="w-full border-collapse text-left text-xs">
+                  <thead className="border-b border-white/10 text-[10px] uppercase tracking-widest text-slate-500">
+                    <tr>
+                      <th className="px-2 py-2">Item</th>
+                      <th className="px-2 py-2 text-right">Qty</th>
+                      <th className="px-2 py-2 text-right">Unit</th>
+                      <th className="px-2 py-2 text-right">Total</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {(selectedPo.items || []).map((line) => (
+                      <tr key={line.id}>
+                        <td className="px-2 py-2 text-slate-200">{line.item_name}</td>
+                        <td className="px-2 py-2 text-right text-slate-400">{line.quantity}</td>
+                        <td className="px-2 py-2 text-right text-slate-400">{Number(line.unit_cost || 0).toLocaleString()}</td>
+                        <td className="px-2 py-2 text-right text-slate-200">{(Number(line.quantity || 0) * Number(line.unit_cost || 0)).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Note</p>
+                  <p className="mt-1 text-xs text-slate-300">{selectedPo.note || "No note attached"}</p>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Linked GRNs</p>
+                  {(selectedPo.grns || []).length === 0 ? (
+                    <p className="mt-1 text-xs text-slate-400">Not reconciled yet.</p>
+                  ) : (
+                    <div className="mt-2 space-y-2">
+                      {selectedPo.grns.map((grn) => (
+                        <div key={grn.id} className="rounded border border-emerald-500/20 bg-emerald-500/5 p-2 text-xs text-slate-300">
+                          <p className="font-bold text-emerald-300">{grn.grn_no}</p>
+                          <p>Invoice: {grn.invoice_no || "-"}</p>
+                          <p>Value: LKR {Number(grn.total_cost || 0).toLocaleString()}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-6">
+                <h4 className="mb-3 text-xs font-black uppercase tracking-widest text-slate-400">PO ↔ GRN Reconciliation</h4>
+                {selectedPo.status === "Received" ? (
+                  <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-200">
+                    This PO is already received and reconciled.
+                  </div>
+                ) : (
+                  <>
+                    <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                      <input
+                        value={reconcile.invoice_no}
+                        onChange={(e) => setReconcile((prev) => ({ ...prev, invoice_no: e.target.value }))}
+                        placeholder="Supplier invoice no"
+                        className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100"
+                      />
+                      <input
+                        value={reconcile.note}
+                        onChange={(e) => setReconcile((prev) => ({ ...prev, note: e.target.value }))}
+                        placeholder="Reconciliation note"
+                        className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-slate-100"
+                      />
+                    </div>
+                    <div className="overflow-hidden rounded-xl border border-white/10">
+                      <table className="w-full border-collapse text-left text-xs">
+                        <thead className="bg-black/20 text-[10px] uppercase tracking-widest text-slate-500">
+                          <tr>
+                            <th className="px-2 py-2">Item</th>
+                            <th className="px-2 py-2 text-right">Received</th>
+                            <th className="px-2 py-2 text-right">Damaged</th>
+                            <th className="px-2 py-2 text-right">Unit Cost</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                          {(selectedPo.items || []).map((line, idx) => (
+                            <tr key={`reconcile-${line.id}`}>
+                              <td className="px-2 py-2 text-slate-300">{line.item_name}</td>
+                              <td className="px-2 py-2">
+                                <input type="number" min="0" value={reconcile.lines[idx]?.received_qty ?? line.quantity} onChange={(e) => updateReconcileLine(idx, { received_qty: e.target.value })} className="w-full rounded border border-white/10 bg-black/20 px-2 py-1 text-right text-slate-100 outline-none" />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input type="number" min="0" value={reconcile.lines[idx]?.damaged_qty ?? 0} onChange={(e) => updateReconcileLine(idx, { damaged_qty: e.target.value })} className="w-full rounded border border-white/10 bg-black/20 px-2 py-1 text-right text-slate-100 outline-none" />
+                              </td>
+                              <td className="px-2 py-2">
+                                <input type="number" min="0" value={reconcile.lines[idx]?.unit_cost ?? line.unit_cost} onChange={(e) => updateReconcileLine(idx, { unit_cost: e.target.value })} className="w-full rounded border border-white/10 bg-black/20 px-2 py-1 text-right text-slate-100 outline-none" />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="mt-3 flex flex-wrap justify-end gap-2">
+                      <button onClick={() => receivePoQuick(selectedPo.id)} className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-xs font-bold text-emerald-200">
+                        Quick Receive (Full)
+                      </button>
+                      <button onClick={reconcilePo} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-500">
+                        Reconcile & Create GRN
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
 
-            <div className="p-6 bg-white/[0.02] border-t border-white/5 flex justify-between items-center">
-              <div>
-                <p className="text-xs text-slate-500 italic max-w-[200px] truncate">Note: {selectedPo.note || "No notes attached"}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">Grand Total</p>
-                <p className="text-3xl font-black text-emerald-400">LKR {selectedPo.total_cost.toLocaleString()}</p>
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-white/5 bg-black/20 flex justify-end gap-3">
-              <button onClick={() => setSelectedPo(null)} className="px-6 py-3 rounded-xl font-bold text-slate-300 bg-white/5 hover:bg-white/10 transition-colors">Close</button>
-              {selectedPo.status !== "Received" && (
-                <button onClick={() => receivePo(selectedPo.id)} className="px-8 py-3 rounded-xl font-bold text-white bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-900/50 transition-all flex items-center gap-2">
-                  <PackageCheck size={18}/> Execute GRN (Receive Goods)
-                </button>
-              )}
+            <div className="flex justify-end gap-3 border-t border-white/5 bg-black/20 p-6">
+              <button onClick={() => setSelectedPo(null)} className="rounded-xl bg-white/5 px-6 py-3 font-bold text-slate-300 transition-colors hover:bg-white/10">
+                Close
+              </button>
             </div>
           </div>
         </div>

@@ -4,6 +4,7 @@ import {
   Wrench,
   Boxes,
   ShoppingCart,
+  Truck,
   Users,
   BarChart3,
   Settings,
@@ -16,12 +17,17 @@ import {
   Barcode,
   History,
   ShieldCheck,
+  Shield,
   Search as SearchIcon,
   PanelLeftClose,
   PanelLeftOpen,
+  RotateCcw,
+  Wallet,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useFetch } from "../hooks/useFetch";
+import { hasPermission, loadPermissions, NAV_PERMISSION_MAP } from "../lib/rbac";
+import api from "../lib/api";
 
 const navGroups = [
   {
@@ -35,7 +41,11 @@ const navGroups = [
     label: "Operations",
     items: [
       ["/repairs", "Repair Management", Wrench],
-      ["/inventory", "Inventory", Boxes],
+      ["/warranty", "Warranty", Shield],
+      ["/returns", "Returns & Refunds", RotateCcw],
+      ["/inventory/products", "Inventory", Boxes],
+      ["/purchase", "Purchasing", Truck],
+      ["/expenses", "Expenses", Wallet],
       ["/pos", "POS / Billing", ShoppingCart],
     ],
   },
@@ -54,6 +64,7 @@ const navGroups = [
   {
     label: "System",
     items: [
+      ["/permissions", "Permissions", Shield],
       ["/audit", "Audit Trail", History],
       ["/backup", "Backup", Database],
       ["/settings", "Settings", Settings],
@@ -79,6 +90,7 @@ export default function Layout() {
   const { data: dashboardData } = useFetch("/dashboard");
   const { data: apiNotifications } = useFetch("/notifications");
 
+  const permissions = useMemo(() => loadPermissions(), [location.pathname]);
   const pendingRepairs = useMemo(() => {
     const rows = Array.isArray(repairs) ? repairs : [];
     return rows.filter((r) => r.status && r.status !== "Delivered").length;
@@ -102,10 +114,20 @@ export default function Layout() {
     localStorage.setItem("theme", dark ? "dark" : "light");
   }, [dark]);
 
-  const flatNav = navGroups.flatMap((g) => g.items);
-  const crumb = flatNav.find(([to]) => location.pathname.startsWith(to))?.[1] ?? "Dashboard";
+  const visibleNavGroups = useMemo(
+    () =>
+      navGroups
+        .map((group) => ({
+          ...group,
+          items: group.items.filter(([to]) => hasPermission(NAV_PERMISSION_MAP[to], permissions)),
+        }))
+        .filter((group) => group.items.length > 0),
+    [permissions]
+  );
+  const visibleFlatNav = visibleNavGroups.flatMap((g) => g.items);
+  const crumb = visibleFlatNav.find(([to]) => location.pathname.startsWith(to))?.[1] ?? "Dashboard";
   const displayName = localStorage.getItem("username") || "Store Admin";
-  const roleLabel = "Admin - Store Manager";
+  const roleLabel = localStorage.getItem("login_role_label") || localStorage.getItem("login_role") || "Staff";
 
   return (
     <div className="app-shell transition-colors duration-300">
@@ -133,7 +155,7 @@ export default function Layout() {
           </div>
 
           <nav className="flex-1 space-y-0 overflow-y-auto overflow-x-hidden pr-1 custom-scrollbar">
-            {navGroups.map((group) => (
+            {visibleNavGroups.map((group) => (
               <div key={group.label} className="mb-6">
                 {!collapsed && (
                   <div className="px-3 text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 animate-in fade-in">
@@ -189,7 +211,13 @@ export default function Layout() {
               </div>
             )}
             <button
-              onClick={() => {
+              onClick={async () => {
+                try {
+                  const sessionId = localStorage.getItem("session_id");
+                  await api.post("/auth/logout", { session_id: sessionId || null, logout_all: false });
+                } catch {
+                  // local logout fallback
+                }
                 localStorage.clear();
                 n("/login");
               }}
@@ -200,7 +228,7 @@ export default function Layout() {
           </div>
         </aside>
 
-        <main className="relative flex-1 p-5 overflow-y-auto h-full transition-all duration-300 bg-[var(--app-bg)]">
+        <main className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden p-5 transition-all duration-300 bg-[var(--app-bg)]">
           <div className="flex items-center justify-between mb-6">
              <div className="flex items-center gap-4">
                 <button 
@@ -227,9 +255,14 @@ export default function Layout() {
                 >
                   {dark ? <Moon size={18} /> : <Sun size={18} />}
                 </button>
-                <div className="h-9 w-9 rounded-full bg-indigo-500 grid place-items-center text-white text-xs font-black border border-white/20">
+                <button
+                  type="button"
+                  onClick={() => n("/settings")}
+                  title="Open account settings"
+                  className="h-9 w-9 rounded-full bg-indigo-500 grid place-items-center text-white text-xs font-black border border-white/20 transition hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-indigo-400/70"
+                >
                   {initials(displayName)}
-                </div>
+                </button>
              </div>
           </div>
 
@@ -248,7 +281,9 @@ export default function Layout() {
             </div>
           )}
 
-          <Outlet />
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

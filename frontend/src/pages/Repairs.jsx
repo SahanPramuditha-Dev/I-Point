@@ -1,8 +1,10 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useFetch } from "../hooks/useFetch";
 import api from "../lib/api";
 import { Badge, Button, Input, KpiCard, PageTitle, SectionCard, Select, Table } from "../components/UI";
-import { CheckCircle2, ClipboardList, Loader2, Wrench, LayoutGrid, List, Search, Plus, Filter, Clock, MoreVertical, Bell } from "lucide-react";
+import { Checkbox, Chip, IconButton, Menu, MenuItem, Table as MuiTable, TableBody, TableCell, TableContainer, TableHead, TablePagination, TableRow, TableSortLabel, Tooltip } from "@mui/material";
+import { CheckCircle2, ClipboardList, Loader2, Wrench, LayoutGrid, List, Search, Plus, Filter, Clock, MoreVertical, Bell, AlertTriangle, UserCheck, Phone, CheckCheck } from "lucide-react";
 import { useFeedback } from "../components/FeedbackProvider";
 import RepairKanban from "../components/RepairKanban";
 
@@ -14,7 +16,30 @@ function statusTone(status) {
   return "slate";
 }
 
+const REPAIR_COLUMNS = [
+  { key: "ticket_no", label: "Ticket #", sortable: true },
+  { key: "customer_name", label: "Customer", sortable: true },
+  { key: "customer_phone", label: "Phone", sortable: true },
+  { key: "device_model", label: "Device", sortable: true },
+  { key: "issue", label: "Issue", sortable: false },
+  { key: "priority", label: "Priority", sortable: true },
+  { key: "sla", label: "SLA", sortable: false },
+  { key: "technician", label: "Technician", sortable: true },
+  { key: "estimated_cost", label: "Est. Cost", sortable: true },
+  { key: "advance_payment", label: "Advance", sortable: false },
+  { key: "balance", label: "Balance", sortable: true },
+  { key: "status", label: "Status", sortable: true },
+  { key: "created_at", label: "Date", sortable: true },
+  { key: "parts", label: "Parts", sortable: false },
+];
+
+const DEFAULT_VISIBLE_COLUMNS = REPAIR_COLUMNS.reduce((acc, col) => {
+  acc[col.key] = true;
+  return acc;
+}, {});
+
 export default function Repairs() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const { toast, confirm } = useFeedback();
   const { data, loading, error, setData } = useFetch('/repairs');
   const customersFetch = useFetch('/customers');
@@ -39,6 +64,20 @@ export default function Repairs() {
   const inventoryFetch = useFetch('/inventory');
   const inventory = inventoryFetch.data || [];
   const [selectedPart, setSelectedPart] = useState({ item_id: '', quantity: 1 });
+  const [priorityFilter, setPriorityFilter] = useState("All Priority");
+  const [dateFilter, setDateFilter] = useState("All Dates");
+  const [selectedRows, setSelectedRows] = useState([]);
+  const [activeRowIndex, setActiveRowIndex] = useState(0);
+  const [tableSortBy, setTableSortBy] = useState("created_at");
+  const [tableSortDir, setTableSortDir] = useState("desc");
+  const [tablePage, setTablePage] = useState(0);
+  const [tableRowsPerPage, setTableRowsPerPage] = useState(25);
+  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
+  const [columnsMenuAnchor, setColumnsMenuAnchor] = useState(null);
+  const [rowMenuAnchor, setRowMenuAnchor] = useState(null);
+  const [rowMenuRepair, setRowMenuRepair] = useState(null);
+  const hydratedFromQuery = useRef(false);
+  const searchInputRef = useRef(null);
 
   const showDetails = async (repair) => {
     try {
@@ -221,8 +260,31 @@ export default function Repairs() {
   
   const [statusFilter, setStatusFilter] = useState("All Status");
   const [techFilter, setTechFilter] = useState("All Technicians");
+  const [savedPreset, setSavedPreset] = useState("All Tickets");
+
+  const applyPreset = (preset) => {
+    setSavedPreset(preset);
+    if (preset === "Overdue") {
+      setStatusFilter("All Status");
+      setPriorityFilter("All Priority");
+      setDateFilter("Older than 3 days");
+    } else if (preset === "Ready to Deliver") {
+      setStatusFilter("Completed");
+      setPriorityFilter("All Priority");
+      setDateFilter("All Dates");
+    } else if (preset === "Awaiting Parts") {
+      setStatusFilter("Waiting for parts");
+      setPriorityFilter("All Priority");
+      setDateFilter("All Dates");
+    } else {
+      setStatusFilter("All Status");
+      setPriorityFilter("All Priority");
+      setDateFilter("All Dates");
+    }
+  };
 
   const filtered = useMemo(() => {
+    const now = Date.now();
     return (data || []).filter((r) => {
       const matchesQuery = !query || 
         (r.ticket_no || "").toLowerCase().includes(query.toLowerCase()) ||
@@ -233,10 +295,215 @@ export default function Repairs() {
       
       const matchesStatus = statusFilter === "All Status" || r.status === statusFilter;
       const matchesTech = techFilter === "All Technicians" || r.technician === techFilter;
+      const matchesPriority = priorityFilter === "All Priority" || (r.priority || "Normal") === priorityFilter;
+      const ageDays = Math.floor((now - new Date(r.created_at).getTime()) / (1000 * 60 * 60 * 24));
+      const matchesDate =
+        dateFilter === "All Dates" ||
+        (dateFilter === "Today" && ageDays === 0) ||
+        (dateFilter === "Last 7 days" && ageDays <= 7) ||
+        (dateFilter === "Older than 3 days" && ageDays > 3);
 
-      return matchesQuery && matchesStatus && matchesTech;
+      return matchesQuery && matchesStatus && matchesTech && matchesPriority && matchesDate;
     });
-  }, [data, query, statusFilter, techFilter]);
+  }, [data, query, statusFilter, techFilter, priorityFilter, dateFilter]);
+
+  const sortedRepairs = useMemo(() => {
+    const rows = [...filtered];
+    rows.sort((a, b) => {
+      const valueFor = (row) => {
+        if (tableSortBy === "ticket_no") return Number(row.ticket_no || 0);
+        if (tableSortBy === "customer_name") return String(row.customer_name || "").toLowerCase();
+        if (tableSortBy === "device_model") return String(row.device_model || "").toLowerCase();
+        if (tableSortBy === "priority") return String(row.priority || "Normal").toLowerCase();
+        if (tableSortBy === "status") return String(row.status || "").toLowerCase();
+        if (tableSortBy === "technician") return String(row.technician || "").toLowerCase();
+        if (tableSortBy === "estimated_cost") return Number(row.estimated_cost || 0);
+        if (tableSortBy === "balance") return Math.max(0, Number(row.estimated_cost || 0) - Number(row.advance_payment || 0));
+        if (tableSortBy === "created_at") return new Date(row.created_at || 0).getTime();
+        return String(row[tableSortBy] || "").toLowerCase();
+      };
+      const av = valueFor(a);
+      const bv = valueFor(b);
+      if (av < bv) return tableSortDir === "asc" ? -1 : 1;
+      if (av > bv) return tableSortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+    return rows;
+  }, [filtered, tableSortBy, tableSortDir]);
+
+  useEffect(() => {
+    if (hydratedFromQuery.current) return;
+    hydratedFromQuery.current = true;
+
+    const q = searchParams.get("q");
+    const st = searchParams.get("status");
+    const tech = searchParams.get("tech");
+    const pr = searchParams.get("priority");
+    const dt = searchParams.get("date");
+    const preset = searchParams.get("preset");
+    const sortBy = searchParams.get("sortBy");
+    const sortDir = searchParams.get("sortDir");
+    const page = Number(searchParams.get("page") || "1");
+    const rows = Number(searchParams.get("rows") || "25");
+    const viewParam = searchParams.get("view");
+    const vc = searchParams.get("vc");
+
+    if (q) setQuery(q);
+    if (st) setStatusFilter(st);
+    if (tech) setTechFilter(tech);
+    if (pr) setPriorityFilter(pr);
+    if (dt) setDateFilter(dt);
+    if (preset) setSavedPreset(preset);
+    if (sortBy) setTableSortBy(sortBy);
+    if (sortDir === "asc" || sortDir === "desc") setTableSortDir(sortDir);
+    if (!Number.isNaN(page) && page > 0) setTablePage(page - 1);
+    if ([10, 25, 50, 100].includes(rows)) setTableRowsPerPage(rows);
+    if (viewParam === "table" || viewParam === "kanban") setView(viewParam);
+    if (vc) {
+      const visible = { ...DEFAULT_VISIBLE_COLUMNS };
+      Object.keys(visible).forEach((k) => { visible[k] = false; });
+      vc.split(",").forEach((k) => {
+        if (Object.prototype.hasOwnProperty.call(visible, k)) visible[k] = true;
+      });
+      setVisibleColumns(visible);
+    }
+  }, [searchParams]);
+
+  const pagedRepairs = useMemo(() => {
+    const start = tablePage * tableRowsPerPage;
+    return sortedRepairs.slice(start, start + tableRowsPerPage);
+  }, [sortedRepairs, tablePage, tableRowsPerPage]);
+
+  useEffect(() => {
+    if (!hydratedFromQuery.current) return;
+    const params = new URLSearchParams();
+    if (query) params.set("q", query);
+    if (statusFilter !== "All Status") params.set("status", statusFilter);
+    if (techFilter !== "All Technicians") params.set("tech", techFilter);
+    if (priorityFilter !== "All Priority") params.set("priority", priorityFilter);
+    if (dateFilter !== "All Dates") params.set("date", dateFilter);
+    if (savedPreset !== "All Tickets") params.set("preset", savedPreset);
+    if (tableSortBy !== "created_at") params.set("sortBy", tableSortBy);
+    if (tableSortDir !== "desc") params.set("sortDir", tableSortDir);
+    if (tablePage > 0) params.set("page", String(tablePage + 1));
+    if (tableRowsPerPage !== 25) params.set("rows", String(tableRowsPerPage));
+    if (view !== "table") params.set("view", view);
+    const visibleKeys = REPAIR_COLUMNS.filter((c) => visibleColumns[c.key]).map((c) => c.key);
+    const allVisible = visibleKeys.length === REPAIR_COLUMNS.length;
+    if (!allVisible) params.set("vc", visibleKeys.join(","));
+    setSearchParams(params, { replace: true });
+  }, [
+    query,
+    statusFilter,
+    techFilter,
+    priorityFilter,
+    dateFilter,
+    savedPreset,
+    tableSortBy,
+    tableSortDir,
+    tablePage,
+    tableRowsPerPage,
+    view,
+    visibleColumns,
+    setSearchParams,
+  ]);
+
+  useEffect(() => {
+    if (!sortedRepairs.length) {
+      setActiveRowIndex(0);
+      return;
+    }
+    if (activeRowIndex > sortedRepairs.length - 1) setActiveRowIndex(0);
+  }, [sortedRepairs, activeRowIndex]);
+
+  useEffect(() => {
+    setTablePage(0);
+  }, [filtered]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key.toLowerCase() === "n" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
+        e.preventDefault();
+        setShowCreate(true);
+      }
+      if (e.key === "/") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+      if (e.key.toLowerCase() === "j" && sortedRepairs.length) {
+        e.preventDefault();
+        setActiveRowIndex((i) => Math.min(i + 1, sortedRepairs.length - 1));
+      }
+      if (e.key.toLowerCase() === "k" && sortedRepairs.length) {
+        e.preventDefault();
+        setActiveRowIndex((i) => Math.max(i - 1, 0));
+      }
+      if (e.key === "Enter" && sortedRepairs[activeRowIndex] && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
+        e.preventDefault();
+        showDetails(sortedRepairs[activeRowIndex]);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sortedRepairs, activeRowIndex]);
+
+  const handleSort = (key) => {
+    if (tableSortBy === key) {
+      setTableSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setTableSortBy(key);
+    setTableSortDir(key === "created_at" ? "desc" : "asc");
+  };
+
+  const toggleColumn = (key) => {
+    setVisibleColumns((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const openRowMenu = (event, repair) => {
+    setRowMenuAnchor(event.currentTarget);
+    setRowMenuRepair(repair);
+  };
+
+  const closeRowMenu = () => {
+    setRowMenuAnchor(null);
+    setRowMenuRepair(null);
+  };
+
+  const cycleStatus = async (repair) => {
+    const order = ["Pending", "Diagnosing", "Repairing", "Waiting for parts", "Completed", "Delivered"];
+    const idx = order.indexOf(repair.status);
+    const next = order[(idx + 1) % order.length];
+    try {
+      await api.put(`/repairs/${repair.id}/status?status=${encodeURIComponent(next)}&note=${encodeURIComponent("Status updated from quick action")}`);
+      setData((data || []).map((r) => (r.id === repair.id ? { ...r, status: next } : r)));
+      toast(`Moved to ${next}`, "success");
+    } catch {
+      toast("Failed to update status", "error");
+    }
+  };
+
+  const bulkStatusUpdate = async (targetStatus) => {
+    if (!selectedRows.length) return toast("Select at least one ticket", "warning");
+    const ok = await confirm("Bulk Update", `Update ${selectedRows.length} tickets to ${targetStatus}?`);
+    if (!ok) return;
+    try {
+      await Promise.all(selectedRows.map((id) =>
+        api.put(`/repairs/${id}/status?status=${encodeURIComponent(targetStatus)}&note=${encodeURIComponent("Bulk status update")}`)
+      ));
+      setData((data || []).map((r) => (selectedRows.includes(r.id) ? { ...r, status: targetStatus } : r)));
+      setSelectedRows([]);
+      toast(`Updated ${selectedRows.length} tickets`, "success");
+    } catch {
+      toast("Bulk update failed", "error");
+    }
+  };
+
+  const assignTechnicianBulk = async (tech) => {
+    if (!selectedRows.length) return toast("Select at least one ticket", "warning");
+    setData((data || []).map((r) => (selectedRows.includes(r.id) ? { ...r, technician: tech } : r)));
+    toast("Technician assignment updated locally", "info");
+  };
 
   const stats = useMemo(() => {
     const rows = data || [];
@@ -252,7 +519,7 @@ export default function Repairs() {
   if (error) return <div className="text-rose-400 p-8 flex items-center gap-3 bg-rose-500/10 rounded-2xl border border-rose-500/20"><MoreVertical className="rotate-90" /> {error}</div>;
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-700">
+    <div className="h-full min-h-0 flex flex-col gap-6 animate-in fade-in duration-700">
       <div className="flex items-center justify-between">
         <PageTitle title="Repair Management" subtitle="Enterprise lifecycle tracking from intake to handover" />
         <div className="flex items-center gap-3">
@@ -271,21 +538,22 @@ export default function Repairs() {
         <KpiCard className="col-span-3" tone="slate" title="Total History" value={String(stats.total)} hint="Lifetime records" icon={<Wrench size={20} />} />
       </div>
 
-      <div className="bg-[#12182a]/60 backdrop-blur-xl border border-white/5 rounded-[32px] overflow-hidden shadow-2xl">
-        <div className="p-8 border-b border-white/5 flex flex-col md:flex-row md:items-center justify-between gap-6 bg-white/[0.01]">
-          <div className="flex flex-col md:flex-row items-center gap-4 flex-1">
-            <div className="relative w-full max-w-md group">
+      <div className="min-h-0 flex-1 bg-[#12182a]/60 backdrop-blur-xl border border-white/5 rounded-[32px] overflow-hidden shadow-2xl flex flex-col">
+        <div className="p-6 border-b border-white/5 space-y-4 bg-white/[0.01]">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="relative group flex-1 min-w-[280px]">
               <Search className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-indigo-400 transition-colors" size={18} />
               <input 
-                className="w-full bg-[#0f172a] border border-white/10 rounded-2xl pl-12 pr-4 py-3.5 text-sm text-white focus:outline-none focus:border-indigo-500/50 focus:ring-4 focus:ring-indigo-500/5 transition-all" 
+                ref={searchInputRef}
+                className="w-full bg-[#0f172a] border border-white/10 rounded-xl pl-12 pr-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/15 transition-all" 
                 placeholder="Search by ticket, customer, phone..."
                 value={query}
                 onChange={e => setQuery(e.target.value)}
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Select 
-                className="h-11 bg-[#0f172a] border-white/10 text-xs min-w-[140px]"
+                className="repair-select h-11 min-w-[160px] max-w-[180px] !w-auto bg-[#0f172a] border-white/10 text-xs"
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
               >
@@ -293,100 +561,213 @@ export default function Repairs() {
                 {["Pending","Diagnosing","Repairing","Waiting for parts","Completed","Delivered"].map(s => <option key={s}>{s}</option>)}
               </Select>
               <Select 
-                className="h-11 bg-[#0f172a] border-white/10 text-xs min-w-[140px]"
+                className="repair-select h-11 min-w-[160px] max-w-[180px] !w-auto bg-[#0f172a] border-white/10 text-xs"
                 value={techFilter}
                 onChange={e => setTechFilter(e.target.value)}
               >
                 <option>All Technicians</option>
                 {technicians.map(t => <option key={t.id} value={t.full_name}>{t.full_name}</option>)}
               </Select>
+              <Select className="repair-select h-11 min-w-[145px] max-w-[165px] !w-auto bg-[#0f172a] border-white/10 text-xs" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
+                <option>All Priority</option>
+                {["Low", "Normal", "High", "Urgent"].map(p => <option key={p}>{p}</option>)}
+              </Select>
+              <Select className="repair-select h-11 min-w-[145px] max-w-[165px] !w-auto bg-[#0f172a] border-white/10 text-xs" value={dateFilter} onChange={e => setDateFilter(e.target.value)}>
+                {["All Dates", "Today", "Last 7 days", "Older than 3 days"].map(d => <option key={d}>{d}</option>)}
+              </Select>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-             <button 
-                onClick={() => {
-                  const csv = [
-                    ["Ticket", "Customer", "Phone", "Device", "Issue", "Technician", "Cost", "Status", "Date"].join(","),
-                    ...filtered.map(r => [r.ticket_no, r.customer_name, r.customer_phone, r.device_model, r.issue, r.technician, r.estimated_cost, r.status, r.created_at].join(","))
-                  ].join("\n");
-                  const blob = new Blob([csv], { type: 'text/csv' });
-                  const url = window.URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `repairs_export_${new Date().toISOString().split('T')[0]}.csv`;
-                  a.click();
-                }}
-                className="px-5 h-11 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-bold transition flex items-center gap-2"
-              >
-                Export CSV
-             </button>
-             <div className="h-8 w-[1px] bg-white/10 mx-2" />
-             <div className="flex items-center p-1 bg-[#0f172a] rounded-xl border border-white/5">
-                <button onClick={() => setView("table")} className={`p-2 rounded-lg transition-all ${view === 'table' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}><List size={18} /></button>
-                <button onClick={() => setView("kanban")} className={`p-2 rounded-lg transition-all ${view === 'kanban' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}><LayoutGrid size={18} /></button>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+             <div className="flex flex-wrap items-center gap-2">
+               {["All Tickets", "Overdue", "Ready to Deliver", "Awaiting Parts"].map((p) => (
+                 <button key={p} onClick={() => applyPreset(p)} className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition ${savedPreset === p ? "bg-indigo-500/30 text-indigo-200 border border-indigo-400/40" : "bg-white/5 text-slate-400 border border-white/10 hover:text-white"}`}>{p}</button>
+               ))}
+             </div>
+             <div className="flex flex-wrap items-center gap-2">
+               <button 
+                  onClick={() => {
+                    const csv = [
+                      ["Ticket", "Customer", "Phone", "Device", "Issue", "Technician", "Cost", "Status", "Date"].join(","),
+                      ...filtered.map(r => [r.ticket_no, r.customer_name, r.customer_phone, r.device_model, r.issue, r.technician, r.estimated_cost, r.status, r.created_at].join(","))
+                    ].join("\n");
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `repairs_export_${new Date().toISOString().split('T')[0]}.csv`;
+                    a.click();
+                  }}
+                  className="px-3 h-9 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-[11px] font-bold transition"
+                >
+                  Export CSV
+                </button>
+               <button onClick={() => bulkStatusUpdate("Repairing")} className="px-3 h-9 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-200 text-[11px] font-bold transition">Bulk Repairing</button>
+               <button onClick={() => bulkStatusUpdate("Completed")} className="px-3 h-9 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 text-[11px] font-bold transition">Bulk Complete</button>
+               <Select className="repair-select h-9 min-w-[180px] max-w-[220px] !w-auto bg-[#0f172a] border-white/10 text-xs" onChange={(e) => e.target.value && assignTechnicianBulk(e.target.value)}>
+                  <option value="">Assign Tech (bulk)</option>
+                  {technicians.map(t => <option key={t.id} value={t.full_name}>{t.full_name}</option>)}
+               </Select>
+               <button
+                 onClick={(e) => setColumnsMenuAnchor(e.currentTarget)}
+                 className="px-3 h-9 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-[11px] font-bold transition"
+               >
+                 Columns
+               </button>
+               <div className="h-7 w-[1px] bg-white/10 mx-1 hidden lg:block" />
+               <div className="flex items-center p-1 bg-[#0f172a] rounded-xl border border-white/5">
+                  <button onClick={() => setView("table")} className={`p-1.5 rounded-lg transition-all ${view === 'table' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}><List size={17} /></button>
+                  <button onClick={() => setView("kanban")} className={`p-1.5 rounded-lg transition-all ${view === 'kanban' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-400 hover:text-white'}`}><LayoutGrid size={17} /></button>
+               </div>
              </div>
           </div>
         </div>
 
+        <div className="min-h-0 flex-1">
         {view === "kanban" ? (
-          <div className="p-8">
-             <RepairKanban repairs={filtered} onStatusChange={(id, status) => {}} onViewDetails={showDetails} />
+          <div className="h-full overflow-auto custom-scrollbar p-8">
+             <RepairKanban repairs={filtered} onStatusChange={async (id, status) => {
+               try {
+                 await api.put(`/repairs/${id}/status?status=${encodeURIComponent(status)}&note=${encodeURIComponent("Moved in board view")}`);
+                 setData((data || []).map((r) => (r.id === id ? { ...r, status } : r)));
+                 toast(`Moved to ${status}`, "success");
+               } catch {
+                 toast("Failed to move ticket", "error");
+               }
+             }} onViewDetails={showDetails} />
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <Table className="table-clean border-none">
-              <thead className="bg-white/[0.02]">
-                <tr className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em]">
-                  <th className="pl-8 py-6">Ticket #</th>
-                  <th>Customer</th>
-                  <th>Phone</th>
-                  <th>Device</th>
-                  <th>Issue</th>
-                  <th>Technician</th>
-                  <th>Est. Cost</th>
-                  <th>Status</th>
-                  <th>Date</th>
-                  <th className="pr-8 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.03]">
-                {filtered.map(r => (
-                  <tr key={r.id} className="group hover:bg-indigo-500/[0.03] transition-all duration-300">
-                    <td className="pl-8 py-5 font-black text-indigo-400 text-sm tracking-tighter cursor-pointer hover:underline" onClick={() => showDetails(r)}>#{r.ticket_no}</td>
-                    <td className="font-bold text-slate-200 text-sm">{r.customer_name || "-"}</td>
-                    <td className="text-slate-500 text-sm font-medium">{r.customer_phone || "077-xxx-xxxx"}</td>
-                    <td className="text-indigo-200 text-sm font-bold">{r.device_model}</td>
-                    <td className="text-slate-400 text-xs max-w-[150px] truncate">{r.issue}</td>
-                    <td className="text-slate-200 text-sm font-medium">{r.technician || "-"}</td>
-                    <td className="text-slate-200 font-bold text-sm">Rs. {r.estimated_cost?.toLocaleString()}</td>
-                    <td>
-                      <button 
-                        onClick={() => openStatusModal(r)}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.03] border border-white/5 w-fit hover:border-indigo-500/50 transition-all group"
-                      >
-                         <div className={`w-1.5 h-1.5 rounded-full ${
-                           r.status === 'Completed' ? 'bg-emerald-500' : 
-                           r.status === 'Repairing' || r.status === 'Diagnosing' ? 'bg-indigo-500' : 'bg-amber-500'
-                         }`} />
-                         <span className="text-[10px] font-black uppercase tracking-widest text-slate-300 group-hover:text-indigo-300">{r.status}</span>
-                      </button>
-                    </td>
-                    <td className="text-slate-500 text-[11px] font-bold">{new Date(r.created_at).toISOString().split('T')[0]}</td>
-                    <td className="pr-8 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button onClick={() => showDetails(r)} className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-white text-[11px] font-bold transition">View</button>
-                        <button onClick={() => printTicket(r)} className="px-4 py-2 rounded-lg bg-white/5 hover:bg-indigo-500/20 text-white text-[11px] font-bold transition" title="Print Job Card">🖨️ Print</button>
-                        <button onClick={() => openStatusModal(r)} className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 transition">
-                           <MoreVertical size={14} />
-                        </button>
+          <div className="h-full custom-scrollbar">
+            <TableContainer sx={{ height: "100%", overflow: "auto" }} className="custom-scrollbar">
+            <MuiTable stickyHeader size="small" sx={{ minWidth: 1700 }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell padding="checkbox" sx={{ bgcolor: "rgba(15,23,42,0.95)", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                    <Checkbox
+                      checked={selectedRows.length > 0 && selectedRows.length === sortedRepairs.length}
+                      indeterminate={selectedRows.length > 0 && selectedRows.length < sortedRepairs.length}
+                      onChange={(e) => setSelectedRows(e.target.checked ? sortedRepairs.map((r) => r.id) : [])}
+                      sx={{ color: "#94a3b8", "&.Mui-checked": { color: "#818cf8" } }}
+                    />
+                  </TableCell>
+                  {REPAIR_COLUMNS.filter((col) => visibleColumns[col.key]).map(({ key, label, sortable }) => (
+                    <TableCell
+                      key={key}
+                      sx={{ bgcolor: "rgba(15,23,42,0.95)", color: "#94a3b8", borderBottom: "1px solid rgba(255,255,255,0.08)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.10em", fontWeight: 700 }}
+                    >
+                      {!sortable ? label : (
+                        <TableSortLabel
+                          active={tableSortBy === key}
+                          direction={tableSortBy === key ? tableSortDir : "asc"}
+                          onClick={() => handleSort(key)}
+                          sx={{ color: "#94a3b8 !important", "& .MuiTableSortLabel-icon": { color: "#64748b !important" } }}
+                        >
+                          {label}
+                        </TableSortLabel>
+                      )}
+                    </TableCell>
+                  ))}
+                  <TableCell align="right" sx={{ bgcolor: "rgba(15,23,42,0.95)", color: "#94a3b8", borderBottom: "1px solid rgba(255,255,255,0.08)", fontSize: "11px", textTransform: "uppercase", letterSpacing: "0.10em", fontWeight: 700 }}>
+                    Actions
+                  </TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {pagedRepairs.map((r, idx) => {
+                  const createdDays = Math.floor((Date.now() - new Date(r.created_at).getTime()) / (1000 * 60 * 60 * 24));
+                  const overdue = !["Completed", "Delivered"].includes(r.status) && createdDays > 3;
+                  const balance = Math.max(0, (r.estimated_cost || 0) - (r.advance_payment || 0));
+                  const rowGlobalIndex = tablePage * tableRowsPerPage + idx;
+                  return (
+                  <TableRow key={r.id} hover selected={rowGlobalIndex === activeRowIndex} sx={{ "& td": { borderBottom: "1px solid rgba(255,255,255,0.05)", color: "#cbd5e1", py: 1.15 }, "&.Mui-selected": { backgroundColor: "rgba(99,102,241,0.14) !important" } }}>
+                    <TableCell padding="checkbox">
+                      <Checkbox checked={selectedRows.includes(r.id)} onChange={(e) => setSelectedRows(e.target.checked ? [...selectedRows, r.id] : selectedRows.filter(id => id !== r.id))} sx={{ color: "#94a3b8", "&.Mui-checked": { color: "#818cf8" } }} />
+                    </TableCell>
+                    {visibleColumns.ticket_no && <TableCell onClick={() => showDetails(r)} sx={{ cursor: "pointer", fontWeight: 800, color: "#818cf8" }}>#{r.ticket_no}</TableCell>}
+                    {visibleColumns.customer_name && <TableCell sx={{ fontWeight: 700, color: "#e2e8f0" }}>{r.customer_name || "-"}</TableCell>}
+                    {visibleColumns.customer_phone && <TableCell sx={{ color: "#94a3b8" }}>{r.customer_phone || "077-xxx-xxxx"}</TableCell>}
+                    {visibleColumns.device_model && <TableCell sx={{ fontWeight: 700, color: "#c4b5fd" }}>{r.device_model}</TableCell>}
+                    {visibleColumns.issue && <TableCell sx={{ maxWidth: 180, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.issue}</TableCell>}
+                    {visibleColumns.priority && (
+                      <TableCell>
+                        <Chip size="small" label={(r.priority || "Normal").toUpperCase()} sx={{ fontWeight: 700, bgcolor: r.priority === "Urgent" ? "rgba(225,29,72,0.2)" : r.priority === "High" ? "rgba(245,158,11,0.18)" : r.priority === "Low" ? "rgba(56,189,248,0.18)" : "rgba(148,163,184,0.18)", color: "#f8fafc", border: "1px solid rgba(255,255,255,0.14)" }} />
+                      </TableCell>
+                    )}
+                    {visibleColumns.sla && <TableCell>{overdue ? <span className="text-rose-400 text-[11px] font-black inline-flex items-center gap-1"><AlertTriangle size={12} />Overdue {createdDays}d</span> : <span className="text-emerald-400 text-[11px] font-bold">Due in {Math.max(0, 3 - createdDays)}d</span>}</TableCell>}
+                    {visibleColumns.technician && <TableCell sx={{ color: "#e2e8f0", fontWeight: 600 }}>{r.technician || "-"}</TableCell>}
+                    {visibleColumns.estimated_cost && <TableCell sx={{ color: "#e2e8f0", fontWeight: 700 }}>Rs. {(r.estimated_cost || 0).toLocaleString()}</TableCell>}
+                    {visibleColumns.advance_payment && <TableCell sx={{ color: "#a5b4fc", fontWeight: 700 }}>Rs. {(r.advance_payment || 0).toLocaleString()}</TableCell>}
+                    {visibleColumns.balance && <TableCell sx={{ color: "#fda4af", fontWeight: 800 }}>Rs. {balance.toLocaleString()}</TableCell>}
+                    {visibleColumns.status && (
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          onClick={() => openStatusModal(r)}
+                          label={String(r.status || "").toUpperCase()}
+                          sx={{ cursor: "pointer", fontWeight: 700, bgcolor: "rgba(255,255,255,0.04)", color: "#d1d5db", border: "1px solid rgba(255,255,255,0.10)" }}
+                        />
+                      </TableCell>
+                    )}
+                    {visibleColumns.created_at && <TableCell sx={{ color: "#94a3b8", fontWeight: 700 }}>{new Date(r.created_at).toISOString().split('T')[0]}</TableCell>}
+                    {visibleColumns.parts && <TableCell>{r.status === "Waiting for parts" ? <Chip size="small" label="Waiting Parts" sx={{ bgcolor: "rgba(245,158,11,0.18)", color: "#fcd34d" }} /> : <Chip size="small" label="Parts Ready" sx={{ bgcolor: "rgba(16,185,129,0.18)", color: "#86efac" }} />}</TableCell>}
+                    <TableCell align="right">
+                      <div className="flex items-center justify-end gap-1 whitespace-nowrap">
+                        <Tooltip title="Quick Status"><IconButton size="small" onClick={() => cycleStatus(r)} sx={{ color: "#a5b4fc" }}><CheckCheck size={14} /></IconButton></Tooltip>
+                        <Tooltip title="Actions"><IconButton size="small" onClick={(e) => openRowMenu(e, r)} sx={{ color: "#94a3b8" }}><MoreVertical size={14} /></IconButton></Tooltip>
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
+                    </TableCell>
+                  </TableRow>
+                )})}
+                {pagedRepairs.length === 0 && (
+                  <TableRow><TableCell colSpan={REPAIR_COLUMNS.filter((c) => visibleColumns[c.key]).length + 2} sx={{ textAlign: "center", color: "#64748b", py: 4 }}>No repair tickets found for current filters.</TableCell></TableRow>
+                )}
+              </TableBody>
+            </MuiTable>
+            </TableContainer>
+            <TablePagination
+              component="div"
+              rowsPerPageOptions={[10, 25, 50, 100]}
+              count={sortedRepairs.length}
+              rowsPerPage={tableRowsPerPage}
+              page={tablePage}
+              onPageChange={(_, p) => setTablePage(p)}
+              onRowsPerPageChange={(e) => {
+                setTableRowsPerPage(parseInt(e.target.value, 10));
+                setTablePage(0);
+              }}
+              sx={{
+                borderTop: "1px solid rgba(255,255,255,0.08)",
+                color: "#94a3b8",
+                ".MuiTablePagination-selectIcon": { color: "#94a3b8" },
+              }}
+            />
+            <Menu
+              anchorEl={columnsMenuAnchor}
+              open={Boolean(columnsMenuAnchor)}
+              onClose={() => setColumnsMenuAnchor(null)}
+              PaperProps={{ sx: { bgcolor: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", color: "#e2e8f0" } }}
+            >
+              {REPAIR_COLUMNS.map((col) => (
+                <MenuItem key={col.key} onClick={() => toggleColumn(col.key)} sx={{ gap: 1 }}>
+                  <Checkbox checked={Boolean(visibleColumns[col.key])} sx={{ color: "#94a3b8", "&.Mui-checked": { color: "#818cf8" }, p: 0.5 }} />
+                  {col.label}
+                </MenuItem>
+              ))}
+            </Menu>
+            <Menu
+              anchorEl={rowMenuAnchor}
+              open={Boolean(rowMenuAnchor)}
+              onClose={closeRowMenu}
+              PaperProps={{ sx: { bgcolor: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", color: "#e2e8f0" } }}
+            >
+              <MenuItem onClick={() => { if (rowMenuRepair) showDetails(rowMenuRepair); closeRowMenu(); }}>View Details</MenuItem>
+              <MenuItem onClick={() => { if (rowMenuRepair) openStatusModal(rowMenuRepair); closeRowMenu(); }}>Update Status</MenuItem>
+              <MenuItem onClick={() => { if (rowMenuRepair) notify(rowMenuRepair); closeRowMenu(); }}>Notify Customer</MenuItem>
+              <MenuItem onClick={() => { if (rowMenuRepair) printTicket(rowMenuRepair); closeRowMenu(); }}>Print Job Card</MenuItem>
+            </Menu>
           </div>
         )}
+        </div>
       </div>
 
       {/* Status Update Modal */}
@@ -673,4 +1054,3 @@ export default function Repairs() {
     </div>
   );
 }
-

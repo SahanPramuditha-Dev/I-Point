@@ -41,13 +41,26 @@ def dashboard(db: Session = Depends(get_db), _=Depends(get_current_user)):
     logs = db.query(ActivityLog).order_by(ActivityLog.created_at.desc()).limit(10).all()
     activity_feed = []
     for l in logs:
+        user_label = getattr(l, "user_name", None)
+        if not user_label:
+            if getattr(l, "user", None):
+                user_label = l.user.full_name or l.user.username
+            elif getattr(l, "user_id", None):
+                user_label = f"User #{l.user_id}"
+            else:
+                user_label = "System"
+
+        module_label = getattr(l, "module", None) or getattr(l, "entity_type", None) or "General"
+        details_text = getattr(l, "details", None) or getattr(l, "description", None) or ""
+        ts = l.created_at.isoformat() if getattr(l, "created_at", None) else now.isoformat()
+
         activity_feed.append({
             "id": l.id,
             "action": l.action,
-            "module": l.module,
-            "user": l.user_name,
-            "timestamp": l.created_at.isoformat(),
-            "details": l.details
+            "module": module_label,
+            "user": user_label,
+            "timestamp": ts,
+            "details": details_text
         })
         
     if not activity_feed:
@@ -86,4 +99,3 @@ def dashboard(db: Session = Depends(get_db), _=Depends(get_current_user)):
             ]
         }
     }
-

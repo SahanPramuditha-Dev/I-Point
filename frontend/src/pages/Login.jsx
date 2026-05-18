@@ -1,103 +1,184 @@
-import { useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { User, Lock, Eye, EyeOff } from "lucide-react";
 import api from "../lib/api";
+import { clearAuthState, hasPermission, NAV_PERMISSION_MAP, savePermissions } from "../lib/rbac";
+import "./Login.css";
+
+function roleToLabel(role) {
+  const raw = String(role || "").trim();
+  if (!raw) return "Staff";
+  return raw
+    .split("_")
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
+
+function pickLandingPath(permissions) {
+  if (!Array.isArray(permissions) || permissions.length === 0) return "/dashboard";
+  const navRows = Object.entries(NAV_PERMISSION_MAP);
+  for (const [path, permission] of navRows) {
+    if (hasPermission(permission, permissions)) return path;
+  }
+  return "/access-denied";
+}
+
+function GoogleMark() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#EA4335" d="M12 10.2v3.9h5.5c-.2 1.2-.9 2.3-1.9 3l3 2.3c1.7-1.6 2.7-4 2.7-6.8 0-.7-.1-1.5-.2-2.2H12z" />
+      <path fill="#34A853" d="M12 22c2.4 0 4.5-.8 6-2.2l-3-2.3c-.8.5-1.9.9-3 .9-2.3 0-4.2-1.5-4.9-3.6l-3.1 2.4C5.4 20.2 8.5 22 12 22z" />
+      <path fill="#4A90E2" d="M7.1 14.8A6 6 0 0 1 6.8 13c0-.6.1-1.2.3-1.8L4 8.8A10 10 0 0 0 3 13c0 1.5.4 2.9 1 4.2l3.1-2.4z" />
+      <path fill="#FBBC05" d="M12 7.6c1.3 0 2.5.5 3.4 1.3l2.6-2.6A10 10 0 0 0 12 4a10 10 0 0 0-8 4.8l3.1 2.4c.7-2.1 2.6-3.6 4.9-3.6z" />
+    </svg>
+  );
+}
 
 export default function Login() {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const navigate = useNavigate();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const n = useNavigate();
 
-  const submit = async (e) => {
-    e.preventDefault();
+  const canSubmit = useMemo(() => Boolean(String(username || "").trim() && password && !submitting), [username, password, submitting]);
+
+  const onSubmit = async (event) => {
+    event.preventDefault();
+    if (!canSubmit) return;
+
+    setSubmitting(true);
+    setError("");
+
     try {
-      const body = new URLSearchParams({ username, password });
-      const { data } = await api.post('/auth/login', body, { 
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+      const form = new URLSearchParams();
+      form.set("username", String(username || "").trim());
+      form.set("password", password);
+      form.set("grant_type", "password");
+      form.set("remember_me", rememberMe ? "true" : "false");
+
+      const tokenRes = await api.post("/auth/login", form, {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
       });
-      localStorage.setItem('token', data.access_token);
-      localStorage.setItem('username', username);
-      n('/dashboard');
-    } catch (e) { 
-      setError(e.response?.data?.detail || 'Login failed'); 
+      const accessToken = tokenRes?.data?.access_token;
+      if (!accessToken) throw new Error("Missing access token");
+
+      localStorage.setItem("token", accessToken);
+      if (tokenRes?.data?.session_id) localStorage.setItem("session_id", tokenRes.data.session_id);
+
+      const [meRes, permissionRes] = await Promise.all([
+        api.get("/auth/me"),
+        api.get("/auth/me/permissions").catch(() => ({ data: { permissions: [] } })),
+      ]);
+
+      const me = meRes?.data || {};
+      const permissions = savePermissions(permissionRes?.data?.permissions || []);
+
+      localStorage.setItem("username", me?.username || String(username || "").trim());
+      localStorage.setItem("login_role", me?.role || "staff");
+      localStorage.setItem("login_role_label", roleToLabel(me?.role || "staff"));
+
+      navigate(pickLandingPath(permissions), { replace: true });
+    } catch (err) {
+      clearAuthState();
+      const detail = err?.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Sign in failed. Please verify username and password.");
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
-    <div 
-      className="min-h-screen w-full flex items-center justify-center bg-cover bg-center bg-no-repeat relative font-sans"
-      style={{ backgroundImage: `url('/bg-login.png')` }}
-    >
-      <div className="absolute inset-0 bg-indigo-900/10 mix-blend-multiply" />
-      
-      <div className="w-full max-w-[440px] bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-10 relative z-10 shadow-[0_8px_32px_0_rgba(31,38,135,0.37)]">
-        <h1 className="text-white text-[32px] font-extrabold text-center mb-8 tracking-wide">Login</h1>
-        
-        <form onSubmit={submit} className="space-y-6">
-          <div className="relative">
-            <input 
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Username"
-              className="w-full bg-transparent border border-white/40 text-white placeholder-white/80 rounded-full py-3.5 px-6 outline-none focus:border-white focus:bg-white/5 transition-all text-sm font-medium"
-            />
-            <User className="absolute right-5 top-1/2 -translate-y-1/2 text-white/90" size={18} strokeWidth={2.5} />
+    <div className="exact-login-shell">
+      <section className="exact-login-window">
+        <div className="exact-login-visual">
+          <div className="exact-login-brand">iSTORE OS</div>
+
+          <div className="exact-login-copy">
+            <h2>Enterprise POS &amp; Repair Management</h2>
+            <p>Premium control surface for mobile sales, diagnostics, and lifecycle execution.</p>
           </div>
 
-          <div className="relative">
-            <input 
-              type={showPassword ? "text" : "password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
-              className="w-full bg-transparent border border-white/40 text-white placeholder-white/80 rounded-full py-3.5 px-6 outline-none focus:border-white focus:bg-white/5 transition-all text-sm font-medium pr-12"
-            />
-            <button 
-              type="button" 
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-5 top-1/2 -translate-y-1/2 text-white/90 hover:text-white transition-colors p-1"
-            >
-              {showPassword ? <EyeOff size={18} strokeWidth={2.5} /> : <Lock size={18} strokeWidth={2.5} />}
-            </button>
+          <div className="exact-login-dots" aria-hidden="true">
+            <span className="active" />
+            <span />
+            <span />
           </div>
+        </div>
 
-          <div className="flex justify-between items-center text-white text-sm px-2 pt-1 font-medium">
-            <label className="flex items-center gap-2.5 cursor-pointer group">
-              <div className="relative flex items-center justify-center">
-                <input 
-                  type="checkbox" 
-                  className="peer appearance-none w-4 h-4 border border-white/70 rounded-[3px] bg-transparent checked:bg-white checked:border-white transition-all cursor-pointer" 
+        <div className="exact-login-auth">
+          <div className="exact-login-form-shell">
+            <header className="exact-login-head">
+              <h1>Welcome back</h1>
+              <p>
+                New to our system? <a href="#support">Contact IT support</a>
+              </p>
+            </header>
+
+            <form className="exact-login-form" onSubmit={onSubmit}>
+              <label className="exact-login-field">
+                <span className="sr-only">Username</span>
+                <input
+                  type="text"
+                  name="username"
+                  autoComplete="username"
+                  placeholder="Username"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  disabled={submitting}
                 />
-                <svg className="absolute w-3 h-3 text-indigo-600 opacity-0 peer-checked:opacity-100 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-              </div>
-              <span className="group-hover:text-white/80 transition-colors">Remember me</span>
-            </label>
-            <a href="#" className="hover:text-white/80 transition-colors">Forgot password?</a>
+              </label>
+
+              <label className="exact-login-field exact-login-password">
+                <span className="sr-only">Password</span>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  name="password"
+                  autoComplete="current-password"
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  disabled={submitting}
+                />
+                <button
+                  type="button"
+                  className="exact-login-eye"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  disabled={submitting}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
+                </button>
+              </label>
+
+              <label className="exact-login-remember">
+                <input
+                  type="checkbox"
+                  checked={rememberMe}
+                  onChange={(event) => setRememberMe(event.target.checked)}
+                  disabled={submitting}
+                />
+                <span>Remember my login details</span>
+              </label>
+
+              {error ? <div className="exact-login-error">{error}</div> : null}
+
+              <button type="submit" className="exact-login-submit" disabled={!canSubmit}>
+                {submitting ? "Signing in..." : "Sign in to account"}
+              </button>
+
+              <div className="exact-login-divider">OR AUTHENTICATE WITH</div>
+
+              <button type="button" className="exact-login-google" disabled>
+                <GoogleMark />
+                <span>Sign in with Google</span>
+              </button>
+            </form>
           </div>
-
-          {error && (
-            <div className="text-red-200 text-sm text-center font-medium bg-red-500/20 py-2.5 rounded-2xl border border-red-500/30">
-              {error}
-            </div>
-          )}
-
-          <button 
-            type="submit"
-            className="w-full bg-white text-gray-900 font-extrabold text-[15px] rounded-full py-3.5 mt-2 hover:bg-gray-100 transition-colors shadow-lg active:scale-[0.98]"
-          >
-            Login
-          </button>
-        </form>
-
-        <p className="text-center text-white text-sm mt-8 font-medium">
-          Don't have an account? <a href="#" className="font-extrabold hover:text-white/80 transition-colors ml-1">Register</a>
-        </p>
-      </div>
+        </div>
+      </section>
     </div>
   );
 }

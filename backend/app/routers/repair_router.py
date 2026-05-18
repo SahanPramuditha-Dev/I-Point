@@ -8,11 +8,77 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.database import get_db
 from app.auth import get_current_user
-from app.models import RepairTicket, InventoryItem, StockMovement, RepairPartUsage
+from app.models import Customer, RepairTicket, InventoryItem, StockMovement, RepairPartUsage
 from app.schemas import RepairIn, RepairPartConsumeIn
+from app.services.warranty_service import (
+    create_repair_warranty_record,
+    ensure_warranty_defaults,
+)
 
 router = APIRouter(prefix="/repairs", tags=["repairs"])
 logger = logging.getLogger("istore.api")
+
+REPAIR_STATUSES = {
+    "Pending",
+    "Diagnosing",
+    "Waiting for Approval",
+    "Waiting for Parts",
+    "Repairing",
+    "Quality Checking",
+    "Completed",
+    "Delivered",
+    "Cancelled",
+}
+
+LEGACY_STATUS_MAP = {
+    "in progress": "Repairing",
+    "in-progress": "Repairing",
+    "waiting approval": "Waiting for Approval",
+}
+
+REPAIR_STATUS_TRANSITIONS = {
+    "Pending": {"Diagnosing", "Cancelled"},
+    "Diagnosing": {"Waiting for Approval", "Waiting for Parts", "Repairing", "Cancelled"},
+    "Waiting for Approval": {"Repairing", "Cancelled"},
+    "Waiting for Parts": {"Repairing", "Cancelled"},
+    "Repairing": {"Quality Checking", "Waiting for Parts", "Cancelled"},
+    "Quality Checking": {"Completed", "Repairing", "Cancelled"},
+    "Completed": {"Delivered", "Repairing"},
+    "Delivered": set(),
+    "Cancelled": set(),
+}
+
+
+def _normalize_status(value: str | None) -> str:
+    raw = str(value or "").strip()
+    lower = raw.lower()
+    mapped = LEGACY_STATUS_MAP.get(lower, raw)
+    if mapped in REPAIR_STATUSES:
+        return mapped
+    if mapped.title() in REPAIR_STATUSES:
+        return mapped.title()
+    return mapped
+
+
+def _validate_status_or_400(value: str | None) -> str:
+    normalized = _normalize_status(value)
+    if normalized not in REPAIR_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid repair status '{value}'. Allowed: {', '.join(sorted(REPAIR_STATUSES))}",
+        )
+    return normalized
+
+
+def _can_transition(old_status: str | None, new_status: str) -> bool:
+    old_normalized = _normalize_status(old_status)
+    if old_normalized == new_status:
+        return True
+    allowed = REPAIR_STATUS_TRANSITIONS.get(old_normalized)
+    # Be permissive for legacy/unknown historical statuses.
+    if allowed is None:
+        return True
+    return new_status in allowed
 
 @router.get('')
 def list_repairs(db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -27,6 +93,7 @@ def list_repairs(db: Session = Depends(get_db), _=Depends(get_current_user)):
         "priority": r.priority,
         "technician": r.technician,
         "estimated_cost": r.estimated_cost,
+        "estimated_completion": r.estimated_completion.isoformat() if r.estimated_completion else None,
         "created_at": r.created_at.isoformat(),
         "customer_name": r.customer.name if r.customer else "Unknown",
         "customer_phone": r.customer.phone if r.customer else "N/A"
@@ -36,7 +103,7 @@ def list_repairs(db: Session = Depends(get_db), _=Depends(get_current_user)):
 def get_repair_stats(db: Session = Depends(get_db), _=Depends(get_current_user)):
     total = db.query(RepairTicket).count()
     pending = db.query(RepairTicket).filter(RepairTicket.status == "Pending").count()
-    in_progress = db.query(RepairTicket).filter(RepairTicket.status.in_(["Diagnosing", "Repairing", "Waiting for Parts"])).count()
+    in_progress = db.query(RepairTicket).filter(RepairTicket.status.in_(["Diagnosing", "Waiting for Approval", "Waiting for Parts", "Repairing", "Quality Checking"])).count()
     completed = db.query(RepairTicket).filter(RepairTicket.status == "Completed").count()
     revenue_today = db.query(func.sum(RepairTicket.estimated_cost))\
                       .filter(RepairTicket.status == "Delivered")\
@@ -53,13 +120,15 @@ def get_repair_stats(db: Session = Depends(get_db), _=Depends(get_current_user))
 @router.post('')
 def create_repair(payload: RepairIn, db: Session = Depends(get_db), _=Depends(get_current_user)):
     from app.models import RepairHistory, Sale
+    payload_data = payload.model_dump()
+    payload_data["status"] = _validate_status_or_400(payload_data.get("status"))
     ticket = RepairTicket(
         ticket_no=f"R-{int(db.query(RepairTicket).count()) + 1001}",
-        **payload.model_dump()
+        **payload_data
     )
     db.add(ticket)
     db.flush()
-    db.add(RepairHistory(repair_id=ticket.id, status="Intake", note="Device received for repair."))
+    db.add(RepairHistory(repair_id=ticket.id, status=ticket.status, note="Repair ticket created."))
     
     if payload.advance_payment > 0:
         sale = Sale(
@@ -84,6 +153,7 @@ def create_repair(payload: RepairIn, db: Session = Depends(get_db), _=Depends(ge
         "priority": ticket.priority,
         "technician": ticket.technician,
         "estimated_cost": ticket.estimated_cost,
+        "estimated_completion": ticket.estimated_completion.isoformat() if ticket.estimated_completion else None,
         "created_at": ticket.created_at.isoformat(),
         "customer_name": ticket.customer.name if ticket.customer else "Unknown",
         "customer_phone": ticket.customer.phone if ticket.customer else "N/A"
@@ -94,7 +164,12 @@ def update_repair(repair_id: int, payload: RepairIn, db: Session = Depends(get_d
     repair = db.query(RepairTicket).filter(RepairTicket.id == repair_id).first()
     if not repair:
         raise HTTPException(status_code=404, detail="Repair not found")
-    for k, v in payload.model_dump().items():
+    incoming = payload.model_dump()
+    new_status = _validate_status_or_400(incoming.get("status"))
+    if not _can_transition(repair.status, new_status):
+        raise HTTPException(status_code=400, detail=f"Invalid repair status transition: {repair.status} -> {new_status}")
+    incoming["status"] = new_status
+    for k, v in incoming.items():
         setattr(repair, k, v)
     db.commit()
     db.refresh(repair)
@@ -108,6 +183,7 @@ def update_repair(repair_id: int, payload: RepairIn, db: Session = Depends(get_d
         "priority": repair.priority,
         "technician": repair.technician,
         "estimated_cost": repair.estimated_cost,
+        "estimated_completion": repair.estimated_completion.isoformat() if repair.estimated_completion else None,
         "created_at": repair.created_at.isoformat(),
         "customer_name": repair.customer.name if repair.customer else "Unknown",
         "customer_phone": repair.customer.phone if repair.customer else "N/A"
@@ -123,28 +199,43 @@ def delete_repair(repair_id: int, db: Session = Depends(get_db), _=Depends(get_c
     return {"ok": True}
 
 @router.put('/{repair_id}/status')
-def update_repair_status(repair_id: int, status: str, request: Request, note: str = None, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    from app.models import Customer, RepairHistory
+def update_repair_status(repair_id: int, status: str, request: Request, note: str = None, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    from app.models import RepairHistory
     repair = db.query(RepairTicket).filter(RepairTicket.id == repair_id).first()
     if not repair:
         raise HTTPException(status_code=404, detail="Repair not found")
     
-    old_status = repair.status
-    repair.status = status
-    if status == "Delivered":
+    new_status = _validate_status_or_400(status)
+    old_status = _normalize_status(repair.status)
+    if not _can_transition(old_status, new_status):
+        raise HTTPException(status_code=400, detail=f"Invalid repair status transition: {old_status} -> {new_status}")
+
+    repair.status = new_status
+    if new_status == "Delivered":
         repair.delivered_at = datetime.utcnow()
     
     db.add(RepairHistory(
         repair_id=repair_id, 
-        status=status, 
-        note=note if note else f"Status changed from {old_status} to {status}"
+        status=new_status, 
+        note=note if note else f"Status changed from {old_status} to {new_status}"
     ))
+    generated_warranty = None
+    if new_status == "Delivered":
+        ensure_warranty_defaults(db)
+        customer = db.query(Customer).filter(Customer.id == repair.customer_id).first()
+        generated_warranty = create_repair_warranty_record(
+            db=db,
+            repair=repair,
+            customer=customer,
+            created_by_id=current_user.id if current_user else None,
+        )
+
     db.commit()
     logger.info(json.dumps({
         "event": "repair_status_changed",
         "request_id": getattr(request.state, "request_id", None),
         "repair_id": repair.id,
-        "status": status,
+        "status": new_status,
     }))
 
     # Generate notification link if possible
@@ -153,11 +244,26 @@ def update_repair_status(repair_id: int, status: str, request: Request, note: st
     if customer and customer.phone:
         phone = customer.phone.replace(" ", "").replace("-", "")
         if not phone.startswith("+"): phone = "94" + phone.lstrip("0") # Default to Sri Lanka if no country code
-        message = f"Hello {customer.name}, your device ({repair.device_model}) repair status is now: {status}. Total estimated: LKR {repair.estimated_cost}. - i Store"
+        message = f"Hello {customer.name}, your device ({repair.device_model}) repair status is now: {new_status}. Total estimated: LKR {repair.estimated_cost}. - i Store"
         import urllib.parse
         whatsapp_url = f"https://wa.me/{phone}?text={urllib.parse.quote(message)}"
 
-    return {"ok": True, "whatsapp_url": whatsapp_url}
+    return {
+        "ok": True,
+        "whatsapp_url": whatsapp_url,
+        "warranty_record": (
+            {
+                "warranty_id": generated_warranty.warranty_code,
+                "warranty_type": generated_warranty.warranty_type,
+                "warranty_days": generated_warranty.warranty_days,
+                "start_date": generated_warranty.start_date.isoformat() if generated_warranty.start_date else None,
+                "end_date": generated_warranty.end_date.isoformat() if generated_warranty.end_date else None,
+                "status": generated_warranty.status,
+            }
+            if generated_warranty
+            else None
+        ),
+    }
 
 @router.get('/{repair_id}/timeline')
 def get_timeline(repair_id: int, db: Session = Depends(get_db), _=Depends(get_current_user)):
@@ -177,7 +283,7 @@ def repair_parts(repair_id: int, db: Session = Depends(get_db), _=Depends(get_cu
     } for r in rows]
 
 @router.post('/{repair_id}/consume-part')
-def consume_part(repair_id: int, payload: RepairPartConsumeIn, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def consume_part(repair_id: int, payload: RepairPartConsumeIn, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     repair = db.query(RepairTicket).filter(RepairTicket.id == repair_id).first()
     if not repair:
         raise HTTPException(status_code=404, detail="Repair not found")
@@ -191,6 +297,7 @@ def consume_part(repair_id: int, payload: RepairPartConsumeIn, db: Session = Dep
     db.add(usage)
     db.add(StockMovement(
         item_id=item.id,
+        user_id=current_user.id if current_user else None,
         movement_type="REPAIR_CONSUME",
         quantity=-payload.quantity,
         reference_type="repair",
@@ -206,7 +313,7 @@ def generate_job_card_pdf(repair_id: int, db: Session = Depends(get_db), _=Depen
     print(f"DEBUG: PDF request received for repair_id={repair_id}")
     from fpdf import FPDF
     from sqlalchemy.orm import joinedload
-    from app.models import RepairPartUsage
+    from app.models import RepairPartUsage, WarrantyRecord
     
     repair = db.query(RepairTicket).options(joinedload(RepairTicket.customer)).filter(RepairTicket.id == repair_id).first()
     if not repair:
@@ -214,6 +321,15 @@ def generate_job_card_pdf(repair_id: int, db: Session = Depends(get_db), _=Depen
 
     parts = db.query(RepairPartUsage).options(joinedload(RepairPartUsage.item)).filter(RepairPartUsage.repair_id == repair.id).all()
     parts_total = sum(p.quantity * p.unit_cost for p in parts)
+    repair_warranty = (
+        db.query(WarrantyRecord)
+        .filter(
+            WarrantyRecord.repair_ticket_id == repair.id,
+            WarrantyRecord.warranty_type == "Repair Service",
+        )
+        .order_by(WarrantyRecord.created_at.desc())
+        .first()
+    )
 
     est_cost = repair.estimated_cost or 0
     grand_total = est_cost + parts_total
@@ -361,11 +477,19 @@ def generate_job_card_pdf(repair_id: int, db: Session = Depends(get_db), _=Depen
     
     pdf.set_font("Helvetica", "", 8)
     pdf.set_text_color(100, 100, 100)
+    warranty_text = "A 90-day warranty applies to replaced parts only (excludes physical damage, liquid damage, or software issues)."
+    if repair_warranty:
+        warranty_text = (
+            f"Repair warranty valid for {repair_warranty.warranty_days} days until "
+            f"{repair_warranty.end_date.strftime('%d %b %Y')} "
+            "(excludes physical, liquid, burn, and misuse damage)."
+        )
+
     terms = [
         "Please present this original job card during device collection.",
         "Devices not claimed within 60 days of completion will be disposed of to recover costs.",
         "We are not responsible for any data loss during the repair process. Please ensure you have a backup.",
-        "A 90-day warranty applies to replaced parts only (excludes physical damage, liquid damage, or software issues).",
+        warranty_text,
         "The estimated cost is subject to change upon deep diagnosis. You will be notified before proceeding."
     ]
     for i, t in enumerate(terms, 1):

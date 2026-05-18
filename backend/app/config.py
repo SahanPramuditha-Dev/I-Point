@@ -35,8 +35,25 @@ class Settings(BaseModel):
     backup_folder: str = os.getenv("BACKUP_FOLDER", str(BACKUP_DIR))
     cors_origins: list[str] = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173,null").split(",") if o.strip()]
     backup_keep_auto: int = int(os.getenv("BACKUP_KEEP_AUTO", "10"))
+    backup_keep_local: int = int(os.getenv("BACKUP_KEEP_LOCAL", os.getenv("BACKUP_KEEP_AUTO", "10")))
+    backup_meta_history_keep: int = int(os.getenv("BACKUP_META_HISTORY_KEEP", "200"))
+    backup_encrypt: bool = os.getenv("BACKUP_ENCRYPT", "false").lower() == "true"
+    backup_encryption_passphrase: str = os.getenv("BACKUP_ENCRYPTION_PASSPHRASE", "")
+    firebase_backup_enabled: bool = os.getenv("FIREBASE_BACKUP_ENABLED", "false").lower() == "true"
+    firebase_store_metadata: bool = os.getenv("FIREBASE_STORE_METADATA", "true").lower() == "true"
+    firebase_metadata_collection: str = os.getenv("FIREBASE_METADATA_COLLECTION", "backup_metadata")
+    firebase_prune_remote_keep: int = int(os.getenv("FIREBASE_PRUNE_REMOTE_KEEP", "30"))
     firebase_service_account: str = os.getenv("FIREBASE_SERVICE_ACCOUNT", "")
     firebase_bucket: str = os.getenv("FIREBASE_BUCKET", "")
+    app_version: str = os.getenv("APP_VERSION", "v2.4.1")
+    db_schema_version: str = os.getenv("DB_SCHEMA_VERSION", "local")
+    device_name: str = os.getenv("DEVICE_NAME", os.getenv("COMPUTERNAME", os.getenv("HOSTNAME", "local-device")))
+    auto_migrate_enabled: bool = os.getenv("AUTO_MIGRATE_ENABLED", "false").lower() == "true"
+    backup_before_migrate: bool = os.getenv("BACKUP_BEFORE_MIGRATE", "true").lower() == "true"
+    backup_schedule_enabled: bool = os.getenv("BACKUP_SCHEDULE_ENABLED", "true").lower() == "true"
+    backup_schedule_hour: int = int(os.getenv("BACKUP_SCHEDULE_HOUR", "23"))
+    backup_schedule_minute: int = int(os.getenv("BACKUP_SCHEDULE_MINUTE", "59"))
+    backup_schedule_timezone: str = os.getenv("BACKUP_SCHEDULE_TIMEZONE", "UTC")
 
     @property
     def is_production(self) -> bool:

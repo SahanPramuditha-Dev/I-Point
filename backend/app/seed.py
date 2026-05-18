@@ -1,8 +1,8 @@
-from app.database import SessionLocal
 from app.models import User, Customer, Supplier, InventoryItem, RepairTicket, Sale
 from app.auth import hash_password
 
 def seed_data():
+    from app.database import SessionLocal
     db = SessionLocal()
     try:
         # Staff / Technicians
